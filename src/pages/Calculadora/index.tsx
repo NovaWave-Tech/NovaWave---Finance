@@ -1,9 +1,446 @@
-import { useMemo, useState } from 'react';
-import { Badge, Box, FormControl, FormLabel, Grid, Heading, Input, SimpleGrid, Slider, SliderFilledTrack, SliderThumb, SliderTrack, Tab, TabList, TabPanel, TabPanels, Tabs, Text } from '@chakra-ui/react';
-import { Calculator } from 'lucide-react';
-import { CurrencyInput } from '../../components/forms/CurrencyInput';
-import { MetricCard } from '../../components/ui/MetricCard';
-import { formatCurrency, formatPercentage } from '../../utils/formatters';
-const box={bg:'panel',border:'1px solid',borderColor:'line',borderRadius:'2xl',p:{base:'4',md:'6'}} as const;
-const Money=({label,value,set}:{label:string;value:number;set:(v:number)=>void})=><FormControl><FormLabel>{label}</FormLabel><CurrencyInput value={value} onValueChange={set}/></FormControl>;
-export default function CalculatorPage(){const [goal,setGoal]=useState({target:30000,current:5000,monthly:750,date:'2028-12-01'}),[installment,setInstallment]=useState({total:5000,count:10,interest:0,date:new Date().toISOString().slice(0,10)}),[budget,setBudget]=useState({salary:5000,fixed:1800,variable:1200,goals:500,investments:500}),[investment,setInvestment]=useState({initial:5000,monthly:500,rate:0.8,months:36}),[card,setCard]=useState({limit:10000,invoice:2500,purchase:1800,count:6});const goalCalc=useMemo(()=>{const remaining=Math.max(0,goal.target-goal.current),months=Math.max(1,(new Date(goal.date).getFullYear()-new Date().getFullYear())*12+new Date(goal.date).getMonth()-new Date().getMonth());return {remaining,months,ideal:remaining/months,forecast:goal.monthly?Math.ceil(remaining/goal.monthly):0}},[goal]);const installmentCalc=useMemo(()=>{const final=installment.total*Math.pow(1+installment.interest/100,installment.count);return {final,part:final/installment.count,interest:final-installment.total}},[installment]);const free=budget.salary-budget.fixed-budget.variable-budget.goals-budget.investments,committed=budget.salary?(budget.salary-free)/budget.salary*100:0;const inv=useMemo(()=>{let value=investment.initial;for(let i=0;i<investment.months;i++)value=value*(1+investment.rate/100)+investment.monthly;const invested=investment.initial+investment.monthly*investment.months;return {value,invested,interest:value-invested}},[investment]);return <><Box mb="6"><Heading size="lg" display="flex" gap="3" alignItems="center"><Calculator/>Calculadora financeira</Heading><Text color="muted">Simule decisões antes de movimentar seu dinheiro.</Text></Box><Tabs variant="soft-rounded" colorScheme="blue"><TabList overflowX="auto" pb="2"><Tab>Meta</Tab><Tab>Parcelas</Tab><Tab>Orçamento</Tab><Tab>Investimento</Tab><Tab>Cartão</Tab></TabList><TabPanels><TabPanel px="0"><Grid templateColumns={{base:'1fr',lg:'1fr 1fr'}} gap="4"><Box {...box}><SimpleGrid columns={{base:1,md:2}} spacing="4"><Money label="Valor da meta" value={goal.target} set={v=>setGoal({...goal,target:v})}/><Money label="Valor atual" value={goal.current} set={v=>setGoal({...goal,current:v})}/><Money label="Aporte mensal" value={goal.monthly} set={v=>setGoal({...goal,monthly:v})}/><FormControl><FormLabel>Data objetivo</FormLabel><Input type="date" value={goal.date} onChange={e=>setGoal({...goal,date:e.target.value})}/></FormControl></SimpleGrid></Box><SimpleGrid columns={2} spacing="3"><MetricCard label="Quanto falta" value={formatCurrency(goalCalc.remaining)}/><MetricCard label="Aporte ideal" value={formatCurrency(goalCalc.ideal)}/><MetricCard label="Meses restantes" value={`${goalCalc.months}`}/><MetricCard label="Previsão no ritmo" value={`${goalCalc.forecast} meses`}/></SimpleGrid></Grid></TabPanel><TabPanel px="0"><Grid templateColumns={{base:'1fr',lg:'1fr 1fr'}} gap="4"><Box {...box}><SimpleGrid columns={2} spacing="4"><Money label="Valor total" value={installment.total} set={v=>setInstallment({...installment,total:v})}/><FormControl><FormLabel>Parcelas</FormLabel><Input type="number" value={installment.count} onChange={e=>setInstallment({...installment,count:Number(e.target.value)})}/></FormControl><FormControl><FormLabel>Juros ao mês</FormLabel><Input type="number" step="0.1" value={installment.interest} onChange={e=>setInstallment({...installment,interest:Number(e.target.value)})}/></FormControl><FormControl><FormLabel>Data da compra</FormLabel><Input type="date" value={installment.date} onChange={e=>setInstallment({...installment,date:e.target.value})}/></FormControl></SimpleGrid></Box><SimpleGrid columns={2} spacing="3"><MetricCard label="Valor da parcela" value={formatCurrency(installmentCalc.part)}/><MetricCard label="Total final" value={formatCurrency(installmentCalc.final)}/><MetricCard label="Juros" value={formatCurrency(installmentCalc.interest)}/><MetricCard label="Meses afetados" value={`${installment.count} meses`}/></SimpleGrid></Grid></TabPanel><TabPanel px="0"><Grid templateColumns={{base:'1fr',lg:'1fr 1fr'}} gap="4"><Box {...box}><SimpleGrid columns={2} spacing="4">{([['Salário','salary'],['Gastos fixos','fixed'],['Gastos variáveis','variable'],['Aportes','goals'],['Investimentos','investments']] as const).map(([label,key])=><Money key={key} label={label} value={budget[key]} set={v=>setBudget({...budget,[key]:v})}/>)}</SimpleGrid></Box><SimpleGrid columns={2} spacing="3"><MetricCard label="Saldo livre" value={formatCurrency(free)} tone={free<0?'red.300':'green.300'}/><MetricCard label="Comprometimento" value={formatPercentage(committed)}/><MetricCard label="Economizado" value={formatPercentage(budget.salary?((budget.goals+budget.investments)/budget.salary*100):0)}/><Box {...box}><Badge colorScheme={committed>90?'red':committed>75?'orange':'green'}>{committed>90?'Orçamento apertado':committed>75?'Atenção':'Orçamento saudável'}</Badge></Box></SimpleGrid></Grid></TabPanel><TabPanel px="0"><Grid templateColumns={{base:'1fr',lg:'1fr 1fr'}} gap="4"><Box {...box}><SimpleGrid columns={2} spacing="4"><Money label="Valor inicial" value={investment.initial} set={v=>setInvestment({...investment,initial:v})}/><Money label="Aporte mensal" value={investment.monthly} set={v=>setInvestment({...investment,monthly:v})}/><FormControl><FormLabel>Rentabilidade mensal: {investment.rate}%</FormLabel><Slider value={investment.rate} min={0} max={5} step={0.1} onChange={v=>setInvestment({...investment,rate:v})}><SliderTrack><SliderFilledTrack/></SliderTrack><SliderThumb/></Slider></FormControl><FormControl><FormLabel>Prazo (meses)</FormLabel><Input type="number" value={investment.months} onChange={e=>setInvestment({...investment,months:Number(e.target.value)})}/></FormControl></SimpleGrid></Box><SimpleGrid columns={2} spacing="3"><MetricCard label="Valor final" value={formatCurrency(inv.value)}/><MetricCard label="Total investido" value={formatCurrency(inv.invested)}/><MetricCard label="Juros acumulados" value={formatCurrency(inv.interest)}/><MetricCard label="Prazo" value={`${investment.months} meses`}/></SimpleGrid></Grid></TabPanel><TabPanel px="0"><Grid templateColumns={{base:'1fr',lg:'1fr 1fr'}} gap="4"><Box {...box}><SimpleGrid columns={2} spacing="4"><Money label="Limite" value={card.limit} set={v=>setCard({...card,limit:v})}/><Money label="Fatura atual" value={card.invoice} set={v=>setCard({...card,invoice:v})}/><Money label="Nova compra" value={card.purchase} set={v=>setCard({...card,purchase:v})}/><FormControl><FormLabel>Parcelas</FormLabel><Input type="number" value={card.count} onChange={e=>setCard({...card,count:Number(e.target.value)})}/></FormControl></SimpleGrid></Box><SimpleGrid columns={2} spacing="3"><MetricCard label="Novo limite usado" value={formatCurrency(card.invoice+card.purchase)}/><MetricCard label="Limite disponível" value={formatCurrency(card.limit-card.invoice-card.purchase)}/><MetricCard label="Parcela mensal" value={formatCurrency(card.purchase/card.count)}/><MetricCard label="Próximas faturas" value={`${card.count} meses`}/></SimpleGrid></Grid></TabPanel></TabPanels></Tabs></>}
+import { useMemo, useState } from "react";
+import {
+  Badge,
+  Box,
+  FormControl,
+  FormLabel,
+  Grid,
+  Heading,
+  Input,
+  SimpleGrid,
+  Slider,
+  SliderFilledTrack,
+  SliderThumb,
+  SliderTrack,
+  Tab,
+  TabList,
+  TabPanel,
+  TabPanels,
+  Tabs,
+  Text,
+} from "@chakra-ui/react";
+import { Calculator } from "lucide-react";
+import { CurrencyInput } from "../../components/forms/CurrencyInput";
+import { MetricCard } from "../../components/ui/MetricCard";
+import { formatCurrency, formatPercentage } from "../../utils/formatters";
+const box = {
+  bg: "panel",
+  border: "1px solid",
+  borderColor: "line",
+  borderRadius: "2xl",
+  p: { base: "4", md: "6" },
+} as const;
+const Money = ({
+  label,
+  value,
+  set,
+}: {
+  label: string;
+  value: number;
+  set: (v: number) => void;
+}) => (
+  <FormControl>
+    <FormLabel>{label}</FormLabel>
+    <CurrencyInput value={value} onValueChange={set} />
+  </FormControl>
+);
+export default function CalculatorPage() {
+  const [goal, setGoal] = useState({
+      target: 30000,
+      current: 5000,
+      monthly: 750,
+      date: "2028-12-01",
+    }),
+    [installment, setInstallment] = useState({
+      total: 5000,
+      count: 10,
+      interest: 0,
+      date: new Date().toISOString().slice(0, 10),
+    }),
+    [budget, setBudget] = useState({
+      salary: 5000,
+      fixed: 1800,
+      variable: 1200,
+      goals: 500,
+      investments: 500,
+    }),
+    [investment, setInvestment] = useState({
+      initial: 5000,
+      monthly: 500,
+      rate: 0.8,
+      months: 36,
+    }),
+    [card, setCard] = useState({
+      limit: 10000,
+      invoice: 2500,
+      purchase: 1800,
+      count: 6,
+    });
+  const goalCalc = useMemo(() => {
+    const remaining = Math.max(0, goal.target - goal.current),
+      months = Math.max(
+        1,
+        (new Date(goal.date).getFullYear() - new Date().getFullYear()) * 12 +
+          new Date(goal.date).getMonth() -
+          new Date().getMonth(),
+      );
+    return {
+      remaining,
+      months,
+      ideal: remaining / months,
+      forecast: goal.monthly ? Math.ceil(remaining / goal.monthly) : 0,
+    };
+  }, [goal]);
+  const installmentCalc = useMemo(() => {
+    const final =
+      installment.total *
+      Math.pow(1 + installment.interest / 100, installment.count);
+    return {
+      final,
+      part: final / installment.count,
+      interest: final - installment.total,
+    };
+  }, [installment]);
+  const free =
+      budget.salary -
+      budget.fixed -
+      budget.variable -
+      budget.goals -
+      budget.investments,
+    committed = budget.salary
+      ? ((budget.salary - free) / budget.salary) * 100
+      : 0;
+  const inv = useMemo(() => {
+    let value = investment.initial;
+    for (let i = 0; i < investment.months; i++)
+      value = value * (1 + investment.rate / 100) + investment.monthly;
+    const invested =
+      investment.initial + investment.monthly * investment.months;
+    return { value, invested, interest: value - invested };
+  }, [investment]);
+  return (
+    <>
+      <Box mb="6">
+        <Heading size="lg" display="flex" gap="3" alignItems="center">
+          <Calculator />
+          Calculadora financeira
+        </Heading>
+        <Text color="muted">
+          Simule decisões antes de movimentar seu dinheiro.
+        </Text>
+      </Box>
+      <Tabs variant="soft-rounded" colorScheme="blue">
+        <TabList overflowX="auto" pb="2">
+          <Tab>Meta</Tab>
+          <Tab>Parcelas</Tab>
+          <Tab>Orçamento</Tab>
+          <Tab>Investimento</Tab>
+          <Tab>Cartão</Tab>
+        </TabList>
+        <TabPanels>
+          <TabPanel px="0">
+            <Grid templateColumns={{ base: "1fr", lg: "1fr 1fr" }} gap="4">
+              <Box {...box}>
+                <SimpleGrid columns={{ base: 1, md: 2 }} spacing="4">
+                  <Money
+                    label="Valor da meta"
+                    value={goal.target}
+                    set={(v) => setGoal({ ...goal, target: v })}
+                  />
+                  <Money
+                    label="Valor atual"
+                    value={goal.current}
+                    set={(v) => setGoal({ ...goal, current: v })}
+                  />
+                  <Money
+                    label="Aporte mensal"
+                    value={goal.monthly}
+                    set={(v) => setGoal({ ...goal, monthly: v })}
+                  />
+                  <FormControl>
+                    <FormLabel>Data objetivo</FormLabel>
+                    <Input
+                      type="date"
+                      value={goal.date}
+                      onChange={(e) =>
+                        setGoal({ ...goal, date: e.target.value })
+                      }
+                    />
+                  </FormControl>
+                </SimpleGrid>
+              </Box>
+              <SimpleGrid columns={2} spacing="3">
+                <MetricCard
+                  label="Quanto falta"
+                  value={formatCurrency(goalCalc.remaining)}
+                />
+                <MetricCard
+                  label="Aporte ideal"
+                  value={formatCurrency(goalCalc.ideal)}
+                />
+                <MetricCard
+                  label="Meses restantes"
+                  value={`${goalCalc.months}`}
+                />
+                <MetricCard
+                  label="Previsão no ritmo"
+                  value={`${goalCalc.forecast} meses`}
+                />
+              </SimpleGrid>
+            </Grid>
+          </TabPanel>
+          <TabPanel px="0">
+            <Grid templateColumns={{ base: "1fr", lg: "1fr 1fr" }} gap="4">
+              <Box {...box}>
+                <SimpleGrid columns={2} spacing="4">
+                  <Money
+                    label="Valor total"
+                    value={installment.total}
+                    set={(v) => setInstallment({ ...installment, total: v })}
+                  />
+                  <FormControl>
+                    <FormLabel>Parcelas</FormLabel>
+                    <Input
+                      type="number"
+                      value={installment.count}
+                      onChange={(e) =>
+                        setInstallment({
+                          ...installment,
+                          count: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </FormControl>
+                  <FormControl>
+                    <FormLabel>Juros ao mês</FormLabel>
+                    <Input
+                      type="number"
+                      step="0.1"
+                      value={installment.interest}
+                      onChange={(e) =>
+                        setInstallment({
+                          ...installment,
+                          interest: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </FormControl>
+                  <FormControl>
+                    <FormLabel>Data da compra</FormLabel>
+                    <Input
+                      type="date"
+                      value={installment.date}
+                      onChange={(e) =>
+                        setInstallment({ ...installment, date: e.target.value })
+                      }
+                    />
+                  </FormControl>
+                </SimpleGrid>
+              </Box>
+              <SimpleGrid columns={2} spacing="3">
+                <MetricCard
+                  label="Valor da parcela"
+                  value={formatCurrency(installmentCalc.part)}
+                />
+                <MetricCard
+                  label="Total final"
+                  value={formatCurrency(installmentCalc.final)}
+                />
+                <MetricCard
+                  label="Juros"
+                  value={formatCurrency(installmentCalc.interest)}
+                />
+                <MetricCard
+                  label="Meses afetados"
+                  value={`${installment.count} meses`}
+                />
+              </SimpleGrid>
+            </Grid>
+          </TabPanel>
+          <TabPanel px="0">
+            <Grid templateColumns={{ base: "1fr", lg: "1fr 1fr" }} gap="4">
+              <Box {...box}>
+                <SimpleGrid columns={2} spacing="4">
+                  {(
+                    [
+                      ["Salário", "salary"],
+                      ["Gastos fixos", "fixed"],
+                      ["Gastos variáveis", "variable"],
+                      ["Aportes", "goals"],
+                      ["Investimentos", "investments"],
+                    ] as const
+                  ).map(([label, key]) => (
+                    <Money
+                      key={key}
+                      label={label}
+                      value={budget[key]}
+                      set={(v) => setBudget({ ...budget, [key]: v })}
+                    />
+                  ))}
+                </SimpleGrid>
+              </Box>
+              <SimpleGrid columns={2} spacing="3">
+                <MetricCard
+                  label="Saldo livre"
+                  value={formatCurrency(free)}
+                  tone={free < 0 ? "red.300" : "green.300"}
+                />
+                <MetricCard
+                  label="Comprometimento"
+                  value={formatPercentage(committed)}
+                />
+                <MetricCard
+                  label="Economizado"
+                  value={formatPercentage(
+                    budget.salary
+                      ? ((budget.goals + budget.investments) / budget.salary) *
+                          100
+                      : 0,
+                  )}
+                />
+                <Box {...box}>
+                  <Badge
+                    colorScheme={
+                      committed > 90
+                        ? "red"
+                        : committed > 75
+                          ? "orange"
+                          : "green"
+                    }
+                  >
+                    {committed > 90
+                      ? "Orçamento apertado"
+                      : committed > 75
+                        ? "Atenção"
+                        : "Orçamento saudável"}
+                  </Badge>
+                </Box>
+              </SimpleGrid>
+            </Grid>
+          </TabPanel>
+          <TabPanel px="0">
+            <Grid templateColumns={{ base: "1fr", lg: "1fr 1fr" }} gap="4">
+              <Box {...box}>
+                <SimpleGrid columns={2} spacing="4">
+                  <Money
+                    label="Valor inicial"
+                    value={investment.initial}
+                    set={(v) => setInvestment({ ...investment, initial: v })}
+                  />
+                  <Money
+                    label="Aporte mensal"
+                    value={investment.monthly}
+                    set={(v) => setInvestment({ ...investment, monthly: v })}
+                  />
+                  <FormControl>
+                    <FormLabel>
+                      Rentabilidade mensal: {investment.rate}%
+                    </FormLabel>
+                    <Slider
+                      value={investment.rate}
+                      min={0}
+                      max={5}
+                      step={0.1}
+                      onChange={(v) =>
+                        setInvestment({ ...investment, rate: v })
+                      }
+                    >
+                      <SliderTrack>
+                        <SliderFilledTrack />
+                      </SliderTrack>
+                      <SliderThumb />
+                    </Slider>
+                  </FormControl>
+                  <FormControl>
+                    <FormLabel>Prazo (meses)</FormLabel>
+                    <Input
+                      type="number"
+                      value={investment.months}
+                      onChange={(e) =>
+                        setInvestment({
+                          ...investment,
+                          months: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </FormControl>
+                </SimpleGrid>
+              </Box>
+              <SimpleGrid columns={2} spacing="3">
+                <MetricCard
+                  label="Valor final"
+                  value={formatCurrency(inv.value)}
+                />
+                <MetricCard
+                  label="Total investido"
+                  value={formatCurrency(inv.invested)}
+                />
+                <MetricCard
+                  label="Juros acumulados"
+                  value={formatCurrency(inv.interest)}
+                />
+                <MetricCard
+                  label="Prazo"
+                  value={`${investment.months} meses`}
+                />
+              </SimpleGrid>
+            </Grid>
+          </TabPanel>
+          <TabPanel px="0">
+            <Grid templateColumns={{ base: "1fr", lg: "1fr 1fr" }} gap="4">
+              <Box {...box}>
+                <SimpleGrid columns={2} spacing="4">
+                  <Money
+                    label="Limite"
+                    value={card.limit}
+                    set={(v) => setCard({ ...card, limit: v })}
+                  />
+                  <Money
+                    label="Fatura atual"
+                    value={card.invoice}
+                    set={(v) => setCard({ ...card, invoice: v })}
+                  />
+                  <Money
+                    label="Nova compra"
+                    value={card.purchase}
+                    set={(v) => setCard({ ...card, purchase: v })}
+                  />
+                  <FormControl>
+                    <FormLabel>Parcelas</FormLabel>
+                    <Input
+                      type="number"
+                      value={card.count}
+                      onChange={(e) =>
+                        setCard({ ...card, count: Number(e.target.value) })
+                      }
+                    />
+                  </FormControl>
+                </SimpleGrid>
+              </Box>
+              <SimpleGrid columns={2} spacing="3">
+                <MetricCard
+                  label="Novo limite usado"
+                  value={formatCurrency(card.invoice + card.purchase)}
+                />
+                <MetricCard
+                  label="Limite disponível"
+                  value={formatCurrency(
+                    card.limit - card.invoice - card.purchase,
+                  )}
+                />
+                <MetricCard
+                  label="Parcela mensal"
+                  value={formatCurrency(card.purchase / card.count)}
+                />
+                <MetricCard
+                  label="Próximas faturas"
+                  value={`${card.count} meses`}
+                />
+              </SimpleGrid>
+            </Grid>
+          </TabPanel>
+        </TabPanels>
+      </Tabs>
+    </>
+  );
+}

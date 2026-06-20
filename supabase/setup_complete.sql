@@ -97,6 +97,9 @@ alter table public.perfil add column if not exists avatar_url text;
 alter table public.perfil add column if not exists tema text not null default 'dark';
 alter table public.perfil add column if not exists dia_salario smallint;
 alter table public.perfil add column if not exists salario_previsto numeric(14,2);
+alter table public.perfil add column if not exists forma_recebimento_salario text not null default 'Pix';
+alter table public.perfil add column if not exists salario_recorrente boolean not null default false;
+alter table public.perfil add column if not exists salario_auto_recebido boolean not null default false;
 alter table public.perfil add column if not exists objetivo_principal text;
 alter table public.perfil add column if not exists banco_principal text;
 alter table public.perfil add column if not exists visualizacao_inicial text not null default 'dashboard';
@@ -104,10 +107,33 @@ alter table public.perfil add column if not exists notificacoes boolean not null
 alter table public.receitas add column if not exists status text not null default 'recebida';
 alter table public.receitas add column if not exists recorrente boolean not null default false;
 alter table public.receitas add column if not exists dia_recebimento smallint;
+alter table public.receitas add column if not exists origem text;
+alter table public.receitas add column if not exists competencia date;
 alter table public.receitas add column if not exists categoria_id uuid references public.categorias_financeiras(id) on delete set null;
+alter table public.receitas add column if not exists tipo text not null default 'avulsa';
 alter table public.despesas add column if not exists status text not null default 'pago';
 alter table public.despesas add column if not exists tipo text not null default 'variavel';
 alter table public.despesas add column if not exists categoria_id uuid references public.categorias_financeiras(id) on delete set null;
+alter table public.compras_cartao add column if not exists categoria_id uuid references public.categorias_financeiras(id) on delete set null;
+alter table public.metas_financeiras add column if not exists categoria_id uuid references public.categorias_financeiras(id) on delete set null;
+alter table public.investimentos add column if not exists categoria_id uuid references public.categorias_financeiras(id) on delete set null;
+alter table public.contas_recorrentes add column if not exists categoria_id uuid references public.categorias_financeiras(id) on delete set null;
+alter table public.despesas add column if not exists origem text;
+alter table public.despesas add column if not exists competencia date;
+alter table public.cartoes add column if not exists status text not null default 'ativa';
+alter table public.metas_financeiras add column if not exists status text not null default 'em_andamento';
+alter table public.investimentos add column if not exists status text not null default 'ativo';
+alter table public.aportes_metas add column if not exists status text not null default 'confirmado';
+alter table public.aportes_metas add column if not exists origem text;
+alter table public.aportes_metas add column if not exists competencia date;
+alter table public.movimentacoes_investimentos add column if not exists origem text;
+alter table public.movimentacoes_investimentos add column if not exists competencia date;
+alter table public.contas_recorrentes add column if not exists tipo text not null default 'despesa';
+alter table public.contas_recorrentes add column if not exists status text not null default 'ativa';
+alter table public.contas_recorrentes add column if not exists origem text;
+alter table public.contas_recorrentes add column if not exists meta_id uuid references public.metas_financeiras(id) on delete set null;
+alter table public.contas_recorrentes add column if not exists investimento_id uuid references public.investimentos(id) on delete set null;
+alter table public.categorias_financeiras add column if not exists status text not null default 'ativa';
 alter table public.eventos_financeiros add column if not exists status text not null default 'pendente';
 alter table public.cartoes add column if not exists ativo boolean not null default true;
 alter table public.compras_cartao add column if not exists status text not null default 'ativa';
@@ -121,6 +147,26 @@ alter table public.despesas add constraint despesas_tipo_check check(tipo in ('f
 alter table public.compras_cartao drop constraint if exists compras_cartao_status_check;
 alter table public.compras_cartao add constraint compras_cartao_status_check check(status in ('ativa','cancelada','estornada'));
 
+create unique index if not exists receitas_salario_competencia_uidx on public.receitas(user_id,origem,competencia) where origem='salario_perfil';
+create unique index if not exists receitas_recorrencia_competencia_uidx on public.receitas(user_id,origem,competencia) where origem like 'recorrencia:%';
+create unique index if not exists despesas_recorrencia_competencia_uidx on public.despesas(user_id,origem,competencia) where origem like 'recorrencia:%';
+create unique index if not exists aportes_recorrencia_competencia_uidx on public.aportes_metas(user_id,origem,competencia) where origem like 'recorrencia:%';
+create unique index if not exists investimentos_recorrencia_competencia_uidx on public.movimentacoes_investimentos(user_id,origem,competencia) where origem like 'recorrencia:%';
+create unique index if not exists contas_recorrentes_origem_uidx on public.contas_recorrentes(user_id,origem) where origem is not null;
+
+alter table public.categorias_financeiras drop constraint if exists categorias_financeiras_tipo_check;
+alter table public.categorias_financeiras add constraint categorias_financeiras_tipo_check check(tipo in ('receita','despesa','cartao','meta','investimento','transferencia'));
+alter table public.metas_financeiras drop constraint if exists metas_financeiras_status_check;
+alter table public.metas_financeiras add constraint metas_financeiras_status_check check(status in ('em_andamento','concluida','pausada','cancelada'));
+alter table public.cartoes drop constraint if exists cartoes_status_check;
+alter table public.cartoes add constraint cartoes_status_check check(status in ('ativa','inativa'));
+alter table public.contas_recorrentes drop constraint if exists contas_recorrentes_tipo_check;
+alter table public.contas_recorrentes add constraint contas_recorrentes_tipo_check check(tipo in ('despesa','receita','assinatura','aporte','investimento'));
+alter table public.contas_recorrentes drop constraint if exists contas_recorrentes_status_check;
+alter table public.contas_recorrentes add constraint contas_recorrentes_status_check check(status in ('ativa','pausada','cancelada'));
+alter table public.movimentacoes_investimentos drop constraint if exists movimentacoes_investimentos_tipo_check;
+alter table public.movimentacoes_investimentos add constraint movimentacoes_investimentos_tipo_check check(tipo in ('aplicacao','resgate','rendimento','ajuste'));
+
 do $$ declare t text; begin
   foreach t in array array['perfil','receitas','despesas','cartoes','compras_cartao','parcelas_cartao','faturas_cartao','metas_financeiras','aportes_metas','investimentos','movimentacoes_investimentos','eventos_financeiros','contas_recorrentes','categorias_financeiras','orcamentos_categoria'] loop
     execute format('alter table public.%I enable row level security',t);
@@ -133,7 +179,18 @@ do $$ declare t text; begin
 end $$;
 
 create or replace function public.handle_new_user() returns trigger language plpgsql security definer set search_path=public as $$
-begin insert into public.perfil(user_id,email,nome) values(new.id,new.email,coalesce(new.raw_user_meta_data->>'nome','')); return new; end; $$;
+begin
+  insert into public.perfil(user_id,email,nome,salario_previsto,objetivo_principal)
+  values(new.id,new.email,coalesce(new.raw_user_meta_data->>'nome',''),nullif(new.raw_user_meta_data->>'salario_previsto','')::numeric,new.raw_user_meta_data->>'objetivo_principal')
+  on conflict(user_id) do nothing;
+  insert into public.categorias_financeiras(user_id,nome,tipo,cor,icone) values
+    (new.id,'Salário','receita','#22C55E','WalletCards'),(new.id,'Freelance','receita','#0F62FE','BriefcaseBusiness'),
+    (new.id,'Alimentação','despesa','#F59E0B','Utensils'),(new.id,'Moradia','despesa','#6C3BFF','House'),
+    (new.id,'Transporte','despesa','#0F62FE','Car'),(new.id,'Saúde','despesa','#EF4444','HeartPulse'),
+    (new.id,'Investimentos','investimento','#22C55E','TrendingUp'),(new.id,'Objetivos','meta','#6C3BFF','Target')
+  on conflict(user_id,nome,tipo) do nothing;
+  return new;
+end; $$;
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created after insert on auth.users for each row execute function public.handle_new_user();
 

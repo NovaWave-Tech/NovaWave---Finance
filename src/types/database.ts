@@ -1,4 +1,18 @@
-export type FinanceTable = 'receitas' | 'despesas' | 'metas_financeiras' | 'investimentos' | 'cartoes' | 'compras_cartao' | 'parcelas_cartao' | 'faturas_cartao' | 'aportes_metas' | 'movimentacoes_investimentos' | 'orcamentos_categoria' | 'eventos_financeiros' | 'contas_recorrentes' | 'categorias_financeiras';
+export type FinanceTable =
+  | "receitas"
+  | "despesas"
+  | "metas_financeiras"
+  | "investimentos"
+  | "cartoes"
+  | "compras_cartao"
+  | "parcelas_cartao"
+  | "faturas_cartao"
+  | "aportes_metas"
+  | "movimentacoes_investimentos"
+  | "orcamentos_categoria"
+  | "eventos_financeiros"
+  | "contas_recorrentes"
+  | "categorias_financeiras";
 
 export interface FinanceRecord {
   id: string;
@@ -38,10 +52,11 @@ export interface FinanceRecord {
   recorrente?: boolean;
   status?: string;
   ativa?: boolean;
-  ultima_geracao?: string;
+  ultima_geracao?: string | null;
   icone?: string;
   categoria_id?: string;
   dia_recebimento?: number;
+  origem?: string;
   data_fechamento?: string;
   data_vencimento?: string;
   paga_em?: string;
@@ -65,6 +80,9 @@ export interface Profile {
   tema?: string;
   dia_salario?: number | null;
   salario_previsto?: number | null;
+  forma_recebimento_salario?: string;
+  salario_recorrente?: boolean;
+  salario_auto_recebido?: boolean;
   objetivo_principal?: string | null;
   banco_principal?: string | null;
   visualizacao_inicial?: string;
