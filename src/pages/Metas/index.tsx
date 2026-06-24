@@ -33,6 +33,7 @@ import { formatCurrency } from "../../utils/formatters";
 import { formatDateBR, todayISO } from "../../utils/date";
 import { CurrencyInput } from "../../components/forms/CurrencyInput";
 import { DateInputBR } from "../../components/forms/DateInputBR";
+import { ConfirmModal } from "../../components/ui/ConfirmModal";
 
 const panel = {
   bg: "panel",
@@ -69,6 +70,10 @@ export default function GoalsPage({
   });
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
+  const [pendingContributionDelete, setPendingContributionDelete] =
+    useState<FinanceRecord>();
+  const [pendingGoalDelete, setPendingGoalDelete] = useState<FinanceRecord>();
+  const [deleting, setDeleting] = useState(false);
   const toast = useToast();
   const open = (goal?: FinanceRecord) => {
     setSelected(goal);
@@ -157,23 +162,52 @@ export default function GoalsPage({
   };
   const removeContribution = async (contribution: FinanceRecord) => {
     const goal = goals.find((x) => x.id === contribution.meta_id);
-    if (!goal || !confirm("Remover este aporte?")) return;
-    await remove("aportes_metas", contribution.id);
-    if (contribution.status !== "pendente") {
-      const next = Math.max(
-        0,
-        (goal.valor_atual ?? 0) - (contribution.valor ?? 0),
-      );
-      await save("metas_financeiras", {
-        ...goal,
-        valor_atual: next,
-        status:
-          goal.status === "concluida" && next < (goal.valor_alvo ?? 0)
-            ? "em_andamento"
-            : goal.status,
+    if (!goal) return;
+    setDeleting(true);
+    try {
+      await remove("aportes_metas", contribution.id);
+      if (contribution.status !== "pendente") {
+        const next = Math.max(
+          0,
+          (goal.valor_atual ?? 0) - (contribution.valor ?? 0),
+        );
+        await save("metas_financeiras", {
+          ...goal,
+          valor_atual: next,
+          status:
+            goal.status === "concluida" && next < (goal.valor_alvo ?? 0)
+              ? "em_andamento"
+              : goal.status,
+        });
+      }
+      toast({ title: "Aporte removido", status: "success" });
+      setPendingContributionDelete(undefined);
+    } catch (error) {
+      toast({
+        title: "Erro ao remover aporte",
+        description: (error as Error).message,
+        status: "error",
       });
+    } finally {
+      setDeleting(false);
     }
-    toast({ title: "Aporte removido", status: "success" });
+  };
+  const removeGoal = async () => {
+    if (!pendingGoalDelete) return;
+    setDeleting(true);
+    try {
+      await remove("metas_financeiras", pendingGoalDelete.id);
+      toast({ title: "Meta excluída", status: "success" });
+      setPendingGoalDelete(undefined);
+    } catch (error) {
+      toast({
+        title: "Erro ao excluir meta",
+        description: (error as Error).message,
+        status: "error",
+      });
+    } finally {
+      setDeleting(false);
+    }
   };
   const confirmContribution = async (contribution: FinanceRecord) => {
     const goal = goals.find((x) => x.id === contribution.meta_id);
@@ -243,10 +277,7 @@ export default function GoalsPage({
                     icon={<Trash2 size={16} />}
                     variant="ghost"
                     colorScheme="red"
-                    onClick={() => {
-                      if (confirm("Excluir esta meta?"))
-                        void remove("metas_financeiras", goal.id);
-                    }}
+                    onClick={() => setPendingGoalDelete(goal)}
                   />
                 </Flex>
               </Flex>
@@ -339,7 +370,7 @@ export default function GoalsPage({
                             icon={<Trash2 size={12} />}
                             size="xs"
                             variant="ghost"
-                            onClick={() => void removeContribution(item)}
+                            onClick={() => setPendingContributionDelete(item)}
                           />
                         </Flex>
                       </Flex>
@@ -473,6 +504,35 @@ export default function GoalsPage({
           </ModalFooter>
         </ModalContent>
       </Modal>
+      <ConfirmModal
+        isOpen={Boolean(pendingGoalDelete)}
+        onClose={() => setPendingGoalDelete(undefined)}
+        onConfirm={() => void removeGoal()}
+        title="Excluir meta"
+        description="Essa ação remove a meta financeira do banco."
+        itemName={pendingGoalDelete?.nome}
+        impact="Aportes vinculados podem perder o contexto da meta. Revise o histórico de aportes depois da exclusão."
+        confirmLabel="Confirmar exclusão"
+        isLoading={deleting}
+      />
+      <ConfirmModal
+        isOpen={Boolean(pendingContributionDelete)}
+        onClose={() => setPendingContributionDelete(undefined)}
+        onConfirm={() =>
+          pendingContributionDelete &&
+          void removeContribution(pendingContributionDelete)
+        }
+        title="Remover aporte"
+        description="Essa ação remove o aporte e recalcula o valor atual da meta quando o aporte já estava confirmado."
+        itemName={
+          pendingContributionDelete
+            ? formatCurrency(pendingContributionDelete.valor)
+            : undefined
+        }
+        impact="O progresso da meta pode diminuir imediatamente após a confirmação."
+        confirmLabel="Remover aporte"
+        isLoading={deleting}
+      />
     </>
   );
 }

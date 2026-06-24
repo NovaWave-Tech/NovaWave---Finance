@@ -10,6 +10,13 @@ import {
   calculateSalaryCommitment,
   validateDashboardData,
 } from "../utils/calculations";
+import {
+  isSalaryRecord,
+  surroundingMonths,
+  withSalaryForMonths,
+} from "./salaryService";
+import { getCalendarSkipKeys, isSkippedThisMonth } from "./calendarExceptions";
+import { getConsolidatedAccountBalance } from "./accountService";
 
 export type FinanceData = Record<FinanceTable, FinanceRecord[]>;
 const sum = (items: FinanceRecord[], field: keyof FinanceRecord = "valor") =>
@@ -35,6 +42,33 @@ export function calculateFinancialSnapshot(
 ) {
   const today = reference.toISOString().slice(0, 10),
     currentMonth = monthKey(reference);
+  const actualCurrentMonth = monthKey(new Date());
+  const skipped = getCalendarSkipKeys(data, currentMonth);
+  data = {
+    ...data,
+    receitas: withSalaryForMonths(
+      data.receitas,
+      profile,
+      surroundingMonths(reference, 12, 24).filter(
+        (month) => month >= actualCurrentMonth,
+      ),
+      new Date().toISOString().slice(0, 10),
+    ),
+  };
+  if (isSkippedThisMonth(skipped, "profile_salary", "profile_salary")) {
+    data = {
+      ...data,
+      receitas: data.receitas.filter(
+        (income) => !(income.is_virtual && isSalaryRecord(income, currentMonth)),
+      ),
+    };
+  }
+  data = {
+    ...data,
+    receitas: data.receitas.filter(
+      (income) => !isSkippedThisMonth(skipped, "receitas", income.id),
+    ),
+  };
   const receivedAll = data.receitas.filter(
     (x) => active(x) && x.status !== "pendente" && (x.data ?? "") <= today,
   );
@@ -58,6 +92,17 @@ export function calculateFinancialSnapshot(
     redemptionsAll = confirmedMoves.filter((x) => x.tipo === "resgate");
   const availableBalance = calculateRealBalance(
     sum(receivedAll),
+    sum(paidExpensesAll),
+    sum(paidInvoicesAll),
+    sum(contributionsAll),
+    sum(applicationsAll),
+    sum(redemptionsAll),
+  );
+  const receivedForPatrimony = receivedAll.filter(
+    (item) => !(item.is_virtual && isSalaryRecord(item)),
+  );
+  const patrimonialBalance = calculateRealBalance(
+    sum(receivedForPatrimony),
     sum(paidExpensesAll),
     sum(paidInvoicesAll),
     sum(contributionsAll),
@@ -115,6 +160,7 @@ export function calculateFinancialSnapshot(
       active(x) &&
       x.status !== "paga" &&
       inMonth(x, currentMonth, "competencia") &&
+      !isSkippedThisMonth(skipped, "parcelas_cartao", x.id) &&
       (!x.compra_id || validPurchases.has(x.compra_id)) &&
       !invoiceCards.has(x.cartao_id),
   );
@@ -125,12 +171,24 @@ export function calculateFinancialSnapshot(
       active(x) &&
       (x.status ?? "ativa") === "ativa" &&
       !["receita", "aporte", "investimento"].includes(x.tipo ?? "despesa") &&
+      !isSkippedThisMonth(skipped, "contas_recorrentes", x.id) &&
       !String(x.ultima_geracao ?? "").startsWith(currentMonth),
   );
   const recurringCommitment = sum(recurringNotGenerated);
-  const plannedGoalTotal = data.metas_financeiras
-    .filter((x) => active(x) && (x.status ?? "em_andamento") === "em_andamento")
-    .reduce((total, goal) => total + (goal.aporte_mensal ?? 0), 0);
+  const isPastMonth = currentMonth < actualCurrentMonth;
+  const plannedGoalTotal = isPastMonth
+    ? 0
+    : data.metas_financeiras
+        .filter(
+          (x) => active(x) && (x.status ?? "em_andamento") === "em_andamento",
+        )
+        .reduce(
+          (total, goal) =>
+            isSkippedThisMonth(skipped, "metas_financeiras", goal.id)
+              ? total
+              : total + (goal.aporte_mensal ?? 0),
+          0,
+        );
   const plannedContributions = Math.max(
     0,
     plannedGoalTotal - sum(monthContributions),
@@ -141,12 +199,12 @@ export function calculateFinancialSnapshot(
         active(x) &&
         x.status === "pendente" &&
         x.tipo === "aplicacao" &&
+        !isSkippedThisMonth(skipped, "movimentacoes_investimentos", x.id) &&
         inMonth(x, currentMonth),
     ),
   );
   const salaryRecord = data.receitas.find(
-    (x) =>
-      x.origem === "salario_perfil" && inMonth(x, currentMonth, "competencia"),
+    (x) => isSalaryRecord(x, currentMonth),
   );
   const salaryExpected = Number(
     profile?.salario_previsto ?? salaryRecord?.valor ?? 0,
@@ -215,6 +273,7 @@ export function calculateFinancialSnapshot(
       data.receitas.filter(
         (x) =>
           active(x) &&
+          !(x.is_virtual && isSalaryRecord(x)) &&
           x.status !== "pendente" &&
           (x.data ?? "") < months[0].key,
       ),
@@ -265,6 +324,15 @@ export function calculateFinancialSnapshot(
         (x) => active(x) && x.status !== "pendente" && inMonth(x, month.key),
       ),
     );
+    const receitasPatrimoniais = sum(
+      data.receitas.filter(
+        (x) =>
+          active(x) &&
+          !(x.is_virtual && isSalaryRecord(x)) &&
+          x.status !== "pendente" &&
+          inMonth(x, month.key),
+      ),
+    );
     const despesas = sum(
       data.despesas.filter(
         (x) =>
@@ -302,7 +370,13 @@ export function calculateFinancialSnapshot(
           inMonth(x, month.key),
       ),
     );
-    running += receitas - despesas - faturas - aportes - aplicacoes + resgates;
+    running +=
+      receitasPatrimoniais -
+      despesas -
+      faturas -
+      aportes -
+      aplicacoes +
+      resgates;
     return {
       ...month,
       receitas,
@@ -352,8 +426,12 @@ export function calculateFinancialSnapshot(
         description: `${item.nome}: ${formatPercent(item.percentual)} utilizado`,
       })),
   ];
+  const consolidatedAccounts = getConsolidatedAccountBalance(data);
+  const operationalBalance = data.contas_financeiras.length
+    ? consolidatedAccounts
+    : patrimonialBalance;
   const patrimony = calculateNetWorth(
-    availableBalance,
+    operationalBalance,
     goalsTotal,
     investedTotal,
   );
@@ -371,10 +449,11 @@ export function calculateFinancialSnapshot(
   return {
     currentMonth,
     availableBalance,
+    accountBalance: consolidatedAccounts,
     goalsTotal,
     investedTotal,
     patrimony,
-    realBalance: availableBalance,
+    realBalance: data.contas_financeiras.length ? operationalBalance : availableBalance,
     projectedBalance: freePredicted,
     committedMoney,
     validationErrors,

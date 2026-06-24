@@ -12,7 +12,9 @@ export type FinanceTable =
   | "orcamentos_categoria"
   | "eventos_financeiros"
   | "contas_recorrentes"
-  | "categorias_financeiras";
+  | "categorias_financeiras"
+  | "contas_financeiras"
+  | "transferencias_internas";
 
 export interface FinanceRecord {
   id: string;
@@ -55,6 +57,12 @@ export interface FinanceRecord {
   ultima_geracao?: string | null;
   icone?: string;
   categoria_id?: string;
+  conta_id?: string | null;
+  conta_origem_id?: string | null;
+  conta_destino_id?: string | null;
+  destino_tipo?: string;
+  destino_id?: string | null;
+  saldo_inicial?: number;
   dia_recebimento?: number;
   origem?: string;
   data_fechamento?: string;
@@ -66,6 +74,8 @@ export interface FinanceRecord {
   limite_categoria?: number;
   created_at?: string;
   updated_at?: string;
+  is_virtual?: boolean;
+  source?: string;
 }
 
 export interface Profile {
@@ -85,6 +95,21 @@ export interface Profile {
   salario_auto_recebido?: boolean;
   objetivo_principal?: string | null;
   banco_principal?: string | null;
+  conta_principal?: string | null;
   visualizacao_inicial?: string;
   notificacoes?: boolean;
+  alert_invoice_due_enabled?: boolean;
+  alert_expense_due_enabled?: boolean;
+  alert_budget_80_enabled?: boolean;
+  alert_goal_delay_enabled?: boolean;
+  alert_salary_received_enabled?: boolean;
+  alert_days_before?: number | null;
+  salary_recurring_enabled?: boolean;
+  salary_confirm_on_day?: boolean;
+  salary_day?: number | null;
+  monthly_salary?: number | null;
+  main_bank?: string | null;
+  main_account?: string | null;
+  default_currency?: string | null;
+  financial_main_goal?: string | null;
 }

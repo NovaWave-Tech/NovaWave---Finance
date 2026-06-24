@@ -12,6 +12,7 @@ const positiveTables = new Set<FinanceTable>([
   "aportes_metas",
   "movimentacoes_investimentos",
   "contas_recorrentes",
+  "transferencias_internas",
 ]);
 const statuses: Partial<Record<FinanceTable, string[]>> = {
   receitas: ["recebida", "pendente", "cancelada"],
@@ -19,6 +20,8 @@ const statuses: Partial<Record<FinanceTable, string[]>> = {
   compras_cartao: ["ativa", "cancelada", "estornada"],
   faturas_cartao: ["aberta", "fechada", "paga", "atrasada", "cancelada"],
   metas_financeiras: ["em_andamento", "concluida", "pausada", "cancelada"],
+  contas_financeiras: ["ativa", "inativa", "arquivada"],
+  transferencias_internas: ["pendente", "confirmada", "cancelada"],
 };
 export function validateFinanceRecord(
   table: FinanceTable,

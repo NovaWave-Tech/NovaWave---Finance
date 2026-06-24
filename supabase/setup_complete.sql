@@ -89,6 +89,20 @@ create table if not exists public.orcamentos_categoria (
   categoria_id uuid not null references public.categorias_financeiras(id) on delete cascade, competencia date not null, limite numeric(14,2) not null check(limite > 0), alerta_percentual numeric(5,2) not null default 80,
   created_at timestamptz not null default now(), updated_at timestamptz not null default now(), unique(user_id,categoria_id,competencia)
 );
+create table if not exists public.contas_financeiras (
+  id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users(id) on delete cascade,
+  nome text not null, tipo text not null, banco text, cor text not null default '#0F62FE',
+  saldo_inicial numeric(14,2) not null default 0, status text not null default 'ativa', observacao text,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+);
+create table if not exists public.transferencias_internas (
+  id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users(id) on delete cascade,
+  conta_origem_id uuid references public.contas_financeiras(id) on delete set null,
+  conta_destino_id uuid references public.contas_financeiras(id) on delete set null,
+  destino_tipo text not null default 'conta', destino_id uuid,
+  valor numeric(14,2) not null check(valor > 0), data date not null, status text not null default 'confirmada', observacao text,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+);
 
 -- Evoluções incrementais para instalações que já possuíam as tabelas.
 alter table public.receitas add column if not exists forma_recebimento text not null default 'Pix';
@@ -102,8 +116,40 @@ alter table public.perfil add column if not exists salario_recorrente boolean no
 alter table public.perfil add column if not exists salario_auto_recebido boolean not null default false;
 alter table public.perfil add column if not exists objetivo_principal text;
 alter table public.perfil add column if not exists banco_principal text;
+alter table public.perfil add column if not exists conta_principal text;
 alter table public.perfil add column if not exists visualizacao_inicial text not null default 'dashboard';
 alter table public.perfil add column if not exists notificacoes boolean not null default true;
+alter table public.perfil add column if not exists salary_recurring_enabled boolean not null default false;
+alter table public.perfil add column if not exists salary_confirm_on_day boolean not null default false;
+alter table public.perfil add column if not exists salary_day smallint;
+alter table public.perfil add column if not exists monthly_salary numeric(14,2);
+alter table public.perfil add column if not exists main_bank text;
+alter table public.perfil add column if not exists main_account text;
+alter table public.perfil add column if not exists default_currency text not null default 'BRL';
+alter table public.perfil add column if not exists financial_main_goal text;
+alter table public.perfil add column if not exists alert_invoice_due_enabled boolean not null default false;
+alter table public.perfil add column if not exists alert_expense_due_enabled boolean not null default false;
+alter table public.perfil add column if not exists alert_budget_80_enabled boolean not null default false;
+alter table public.perfil add column if not exists alert_goal_delay_enabled boolean not null default false;
+alter table public.perfil add column if not exists alert_salary_received_enabled boolean not null default false;
+alter table public.perfil add column if not exists alert_days_before integer not null default 3;
+update public.perfil set
+  salary_recurring_enabled = coalesce(salary_recurring_enabled, salario_recorrente, false),
+  salary_confirm_on_day = coalesce(salary_confirm_on_day, salario_auto_recebido, false),
+  salary_day = coalesce(salary_day, dia_salario),
+  monthly_salary = coalesce(monthly_salary, salario_previsto),
+  main_bank = coalesce(main_bank, banco_principal),
+  main_account = coalesce(main_account, conta_principal),
+  default_currency = coalesce(default_currency, moeda, 'BRL'),
+  financial_main_goal = coalesce(financial_main_goal, objetivo_principal),
+  salario_recorrente = coalesce(salario_recorrente, salary_recurring_enabled, false),
+  salario_auto_recebido = coalesce(salario_auto_recebido, salary_confirm_on_day, false),
+  dia_salario = coalesce(dia_salario, salary_day),
+  salario_previsto = coalesce(salario_previsto, monthly_salary),
+  banco_principal = coalesce(banco_principal, main_bank),
+  conta_principal = coalesce(conta_principal, main_account),
+  moeda = coalesce(moeda, default_currency, 'BRL'),
+  objetivo_principal = coalesce(objetivo_principal, financial_main_goal);
 alter table public.receitas add column if not exists status text not null default 'recebida';
 alter table public.receitas add column if not exists recorrente boolean not null default false;
 alter table public.receitas add column if not exists dia_recebimento smallint;
@@ -135,8 +181,20 @@ alter table public.contas_recorrentes add column if not exists meta_id uuid refe
 alter table public.contas_recorrentes add column if not exists investimento_id uuid references public.investimentos(id) on delete set null;
 alter table public.categorias_financeiras add column if not exists status text not null default 'ativa';
 alter table public.eventos_financeiros add column if not exists status text not null default 'pendente';
+alter table public.eventos_financeiros add column if not exists origem text;
+alter table public.eventos_financeiros add column if not exists competencia date;
 alter table public.cartoes add column if not exists ativo boolean not null default true;
 alter table public.compras_cartao add column if not exists status text not null default 'ativa';
+alter table public.receitas add column if not exists conta_id uuid references public.contas_financeiras(id) on delete set null;
+alter table public.despesas add column if not exists conta_id uuid references public.contas_financeiras(id) on delete set null;
+alter table public.faturas_cartao add column if not exists conta_id uuid references public.contas_financeiras(id) on delete set null;
+alter table public.aportes_metas add column if not exists conta_id uuid references public.contas_financeiras(id) on delete set null;
+alter table public.movimentacoes_investimentos add column if not exists conta_id uuid references public.contas_financeiras(id) on delete set null;
+alter table public.contas_financeiras add column if not exists banco text;
+alter table public.contas_financeiras add column if not exists cor text not null default '#0F62FE';
+alter table public.contas_financeiras add column if not exists saldo_inicial numeric(14,2) not null default 0;
+alter table public.contas_financeiras add column if not exists status text not null default 'ativa';
+alter table public.transferencias_internas add column if not exists status text not null default 'confirmada';
 
 alter table public.receitas drop constraint if exists receitas_status_check;
 alter table public.receitas add constraint receitas_status_check check(status in ('recebida','pendente','cancelada'));
@@ -153,6 +211,14 @@ create unique index if not exists despesas_recorrencia_competencia_uidx on publi
 create unique index if not exists aportes_recorrencia_competencia_uidx on public.aportes_metas(user_id,origem,competencia) where origem like 'recorrencia:%';
 create unique index if not exists investimentos_recorrencia_competencia_uidx on public.movimentacoes_investimentos(user_id,origem,competencia) where origem like 'recorrencia:%';
 create unique index if not exists contas_recorrentes_origem_uidx on public.contas_recorrentes(user_id,origem) where origem is not null;
+create unique index if not exists eventos_excecao_calendario_uidx on public.eventos_financeiros(user_id,origem,competencia) where tipo='excecao_calendario';
+create index if not exists receitas_conta_id_idx on public.receitas(conta_id);
+create index if not exists despesas_conta_id_idx on public.despesas(conta_id);
+create index if not exists faturas_cartao_conta_id_idx on public.faturas_cartao(conta_id);
+create index if not exists aportes_metas_conta_id_idx on public.aportes_metas(conta_id);
+create index if not exists movimentacoes_investimentos_conta_id_idx on public.movimentacoes_investimentos(conta_id);
+create index if not exists transferencias_internas_origem_idx on public.transferencias_internas(conta_origem_id);
+create index if not exists transferencias_internas_destino_idx on public.transferencias_internas(conta_destino_id);
 
 alter table public.categorias_financeiras drop constraint if exists categorias_financeiras_tipo_check;
 alter table public.categorias_financeiras add constraint categorias_financeiras_tipo_check check(tipo in ('receita','despesa','cartao','meta','investimento','transferencia'));
@@ -166,9 +232,17 @@ alter table public.contas_recorrentes drop constraint if exists contas_recorrent
 alter table public.contas_recorrentes add constraint contas_recorrentes_status_check check(status in ('ativa','pausada','cancelada'));
 alter table public.movimentacoes_investimentos drop constraint if exists movimentacoes_investimentos_tipo_check;
 alter table public.movimentacoes_investimentos add constraint movimentacoes_investimentos_tipo_check check(tipo in ('aplicacao','resgate','rendimento','ajuste'));
+alter table public.contas_financeiras drop constraint if exists contas_financeiras_tipo_check;
+alter table public.contas_financeiras add constraint contas_financeiras_tipo_check check(tipo in ('Conta Corrente','Conta Poupança','Conta Investimento','Carteira','Caixa'));
+alter table public.contas_financeiras drop constraint if exists contas_financeiras_status_check;
+alter table public.contas_financeiras add constraint contas_financeiras_status_check check(status in ('ativa','inativa','arquivada'));
+alter table public.transferencias_internas drop constraint if exists transferencias_internas_destino_tipo_check;
+alter table public.transferencias_internas add constraint transferencias_internas_destino_tipo_check check(destino_tipo in ('conta','meta','investimento','reserva'));
+alter table public.transferencias_internas drop constraint if exists transferencias_internas_status_check;
+alter table public.transferencias_internas add constraint transferencias_internas_status_check check(status in ('pendente','confirmada','cancelada'));
 
 do $$ declare t text; begin
-  foreach t in array array['perfil','receitas','despesas','cartoes','compras_cartao','parcelas_cartao','faturas_cartao','metas_financeiras','aportes_metas','investimentos','movimentacoes_investimentos','eventos_financeiros','contas_recorrentes','categorias_financeiras','orcamentos_categoria'] loop
+  foreach t in array array['perfil','receitas','despesas','cartoes','compras_cartao','parcelas_cartao','faturas_cartao','metas_financeiras','aportes_metas','investimentos','movimentacoes_investimentos','eventos_financeiros','contas_recorrentes','categorias_financeiras','orcamentos_categoria','contas_financeiras','transferencias_internas'] loop
     execute format('alter table public.%I enable row level security',t);
     execute format('drop policy if exists "Usuário acessa apenas os próprios dados" on public.%I',t);
     execute format('create policy "Usuário acessa apenas os próprios dados" on public.%I for all using (auth.uid() = user_id) with check (auth.uid() = user_id)',t);

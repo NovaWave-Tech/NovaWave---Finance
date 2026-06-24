@@ -6,11 +6,13 @@ import {
   Flex,
   Grid,
   Heading,
+  Input,
   Progress,
   SimpleGrid,
   Stack,
   Text,
 } from "@chakra-ui/react";
+import { useState } from "react";
 import {
   Area,
   AreaChart,
@@ -28,15 +30,12 @@ import {
 } from "recharts";
 import {
   AlertTriangle,
-  ArrowDownRight,
   ArrowUpRight,
+  CalendarDays,
   CreditCard,
-  Landmark,
   PiggyBank,
   Plus,
-  Target,
   WalletCards,
-  Repeat2,
 } from "lucide-react";
 import type {
   FinanceRecord,
@@ -47,7 +46,11 @@ import {
   calculateFinancialSnapshot,
   type FinanceData,
 } from "../../services/financialEngine";
+import { calculateStrategicAnalysis } from "../../services/strategicAnalysis";
+import { buildFinancialCalendar } from "../../services/calendarService";
+import { calculateAccountBalances } from "../../services/accountService";
 import { formatCurrencyBRL, formatPercent } from "../../utils/formatters";
+import { formatDateBR } from "../../utils/date";
 
 const palette = [
   "#0F62FE",
@@ -91,93 +94,117 @@ export default function Dashboard({
 }: {
   data: Record<FinanceTable, FinanceRecord[]>;
   profile?: Profile | null;
-  onNavigate: (page: "despesas" | "metas") => void;
+  onNavigate: (
+    page:
+      | "receitas"
+      | "despesas"
+      | "cartoes"
+      | "metas"
+      | "saude"
+      | "alertas"
+      | "notificacoes"
+      | "patrimonio"
+      | "contas"
+      | "perfil",
+  ) => void;
 }) {
+  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const reference = new Date(`${month}-15T12:00:00`);
   const snapshot = calculateFinancialSnapshot(
     data as FinanceData,
-    new Date(),
+    reference,
     profile,
   );
-  const cards = [
+  const previousReference = new Date(
+    reference.getFullYear(),
+    reference.getMonth() - 1,
+    15,
+  );
+  const previous = calculateFinancialSnapshot(
+    data as FinanceData,
+    previousReference,
+    profile,
+  );
+  const strategic = calculateStrategicAnalysis(data, profile, reference);
+  const accounts = calculateAccountBalances(data as FinanceData);
+  const accountTotal = accounts.reduce((total, account) => total + account.saldo, 0);
+  const events = buildFinancialCalendar(data as FinanceData, month, profile)
+    .filter((event) => (event.data ?? "") >= new Date().toISOString().slice(0, 10))
+    .slice(0, 7);
+  const diff = (current: number, old: number) =>
+    old ? ((current - old) / Math.abs(old)) * 100 : current ? 100 : 0;
+  const monthLabel = reference.toLocaleDateString("pt-BR", {
+    month: "long",
+    year: "numeric",
+  });
+  const firstName = profile?.nome?.split(" ")[0] || "tudo bem";
+  const onboardingSteps = [
+    { label: "Dados pessoais", done: Boolean(profile?.nome) },
+    {
+      label: "Salário recorrente",
+      done: Boolean(profile?.salario_previsto || profile?.monthly_salary),
+    },
+    { label: "Cartões cadastrados", done: data.cartoes.length > 0 },
+    { label: "Metas financeiras", done: data.metas_financeiras.length > 0 },
+  ];
+  const showOnboarding = onboardingSteps.some((step) => !step.done);
+  const primaryCards = [
     [
-      "Salário previsto",
-      snapshot.salaryExpected,
-      <WalletCards />,
-      `Recebido: ${formatCurrencyBRL(snapshot.salaryReceived)}`,
-    ],
-    [
-      "Receitas recebidas",
-      snapshot.received,
-      <ArrowUpRight />,
-      `Total previsto: ${formatCurrencyBRL(snapshot.predictedRevenue)}`,
-    ],
-    [
-      "Receitas previstas",
-      snapshot.predictedIncome,
-      <ArrowUpRight />,
-      `Total do mês: ${formatCurrencyBRL(snapshot.predictedRevenue)}`,
-    ],
-    [
-      "Despesas pagas",
-      snapshot.paidExpenses,
-      <ArrowDownRight />,
-      `Pendentes: ${formatCurrencyBRL(snapshot.pendingExpenses)}`,
-    ],
-    [
-      "Faturas em aberto",
-      snapshot.openInvoiceTotal,
-      <CreditCard />,
-      `Abertas ${formatCurrencyBRL(snapshot.openInvoiceValue)} · fechadas ${formatCurrencyBRL(snapshot.closedInvoiceValue)} · pagas ${formatCurrencyBRL(snapshot.paidInvoiceValue)}`,
-    ],
-    [
-      "Aportes em metas",
-      snapshot.contributions,
-      <Target />,
-      `Planejados: ${formatCurrencyBRL(snapshot.plannedContributions)}`,
-    ],
-    [
-      "Aplicado no mês",
-      snapshot.appliedInvestments,
-      <Landmark />,
-      `Resgates: ${formatCurrencyBRL(snapshot.redeemedInvestments)}`,
-    ],
-    [
-      "Patrimônio total",
-      snapshot.patrimony,
-      <PiggyBank />,
-      "Saldo + metas + investimentos",
-    ],
-    [
-      "Saldo real",
+      "Saldo disponível",
       snapshot.realBalance,
+      previous.realBalance,
       <WalletCards />,
-      "Todas as movimentações confirmadas",
+      "Movimentações confirmadas até agora",
+      "brand.300",
     ],
     [
-      "Saldo previsto",
-      snapshot.projectedBalance,
-      <WalletCards />,
-      "Real + entradas previstas − compromissos",
+      "Receita prevista",
+      snapshot.predictedRevenue,
+      previous.predictedRevenue,
+      <ArrowUpRight />,
+      "Recebidas + entradas pendentes",
+      "green.300",
+    ],
+    [
+      "Receita recebida",
+      snapshot.received,
+      previous.received,
+      <ArrowUpRight />,
+      "Entradas efetivadas no mês",
+      "green.300",
     ],
     [
       "Dinheiro comprometido",
       snapshot.committedMoney,
+      previous.committedMoney,
       <CreditCard />,
-      `${formatPercent(snapshot.incomeCommitment)} do salário/renda`,
+      "Pendências, faturas e planos",
+      "orange.300",
     ],
     [
-      "Recorrências pendentes",
-      snapshot.recurringCommitment,
-      <Repeat2 />,
-      `Investimentos planejados: ${formatCurrencyBRL(snapshot.plannedInvestments)}`,
-    ],
-    [
-      "Livre realizado",
-      snapshot.freeReal,
+      "Dinheiro livre",
+      snapshot.freePredicted,
+      previous.freePredicted,
       <PiggyBank />,
-      `Livre previsto: ${formatCurrencyBRL(snapshot.freePredicted)}`,
+      "Sobra prevista após compromissos",
+      snapshot.freePredicted >= 0 ? "green.300" : "red.300",
+    ],
+    [
+      "Patrimônio total",
+      snapshot.patrimony,
+      previous.patrimony,
+      <PiggyBank />,
+      "Saldo + metas + investimentos",
+      "purple.300",
     ],
   ];
+  const currentInvoice =
+    snapshot.openInvoiceTotal || snapshot.openInvoiceValue + snapshot.closedInvoiceValue;
+  const nextInvoice = data.faturas_cartao
+    .filter((invoice) => invoice.status !== "paga")
+    .sort((a, b) =>
+      (a.data_vencimento ?? "").localeCompare(b.data_vencimento ?? ""),
+    )[0];
   return (
     <>
       <Flex
@@ -188,45 +215,223 @@ export default function Dashboard({
         mb="7"
       >
         <Box>
-          <Heading size="lg">Sua central financeira</Heading>
+          <Text color="muted" fontSize="sm" fontWeight="700">
+            DASHBOARD FINANCEIRA
+          </Text>
+          <Heading size="lg">Olá, {firstName} 👋</Heading>
           <Text color="muted" mt="1">
-            Caixa, patrimônio e compromissos conectados em tempo real.
+            Aqui está o resumo financeiro de{" "}
+            <Text as="span" textTransform="capitalize">
+              {monthLabel}
+            </Text>
+            .
           </Text>
         </Box>
-        <Button
-          leftIcon={<Plus size={17} />}
-          onClick={() => onNavigate("despesas")}
-        >
-          Nova movimentação
-        </Button>
+        <Flex gap="2" wrap="wrap" align="center">
+          <Input
+            type="month"
+            value={month}
+            onChange={(event) => setMonth(event.target.value)}
+            maxW="180px"
+            bg="panel"
+            borderColor="line"
+          />
+          <Button size="sm" variant="outline" onClick={() => onNavigate("receitas")}>
+            Nova receita
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => onNavigate("despesas")}>
+            Nova despesa
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => onNavigate("cartoes")}>
+            Nova compra
+          </Button>
+          <Button size="sm" leftIcon={<Plus size={16} />} onClick={() => onNavigate("metas")}>
+            Novo aporte
+          </Button>
+        </Flex>
       </Flex>
-      <SimpleGrid columns={{ base: 1, sm: 2, xl: 4 }} spacing="14px">
-        {cards.map(([label, value, icon, help], index) => (
-          <Box key={String(label)} {...panel} p="19px">
-            <Flex
-              justify="space-between"
-              color={
-                index === 2 || index === 3
-                  ? "orange.300"
-                  : index === 1
-                    ? "green.300"
-                    : "brand.300"
-              }
+      {showOnboarding && (
+        <Box
+          {...panel}
+          p="20px"
+          mb="4"
+          bg="linear-gradient(135deg,rgba(53,200,148,.14),rgba(15,98,254,.10))"
+        >
+          <Flex
+            justify="space-between"
+            align={{ base: "flex-start", md: "center" }}
+            direction={{ base: "column", md: "row" }}
+            gap="4"
+          >
+            <Box>
+              <Badge colorScheme="green">Primeiros passos</Badge>
+              <Heading size="sm" mt="2">
+                Configure a base real do NovaWave Finance
+              </Heading>
+              <Text color="muted" fontSize="sm" mt="1">
+                Quanto mais completa essa base, melhores ficam calendário, métricas e alertas.
+              </Text>
+              <Flex gap="2" wrap="wrap" mt="3">
+                {onboardingSteps.map((step) => (
+                  <Badge key={step.label} colorScheme={step.done ? "green" : "gray"}>
+                    {step.done ? "✓" : "•"} {step.label}
+                  </Badge>
+                ))}
+              </Flex>
+            </Box>
+            <Button variant="outline" onClick={() => onNavigate("perfil")}>
+              Completar perfil
+            </Button>
+          </Flex>
+        </Box>
+      )}
+      <SimpleGrid columns={{ base: 1, md: 2, xl: 3 }} spacing="14px">
+        {primaryCards.map(([label, value, previousValue, icon, help, tone]) => {
+          const variation = diff(Number(value), Number(previousValue));
+          return (
+            <Box
+              key={String(label)}
+              {...panel}
+              p="22px"
+              position="relative"
+              overflow="hidden"
+              _before={{
+                content: '""',
+                position: "absolute",
+                inset: 0,
+                bg: "linear-gradient(135deg,rgba(15,98,254,.12),transparent 48%)",
+                pointerEvents: "none",
+              }}
             >
+              <Flex justify="space-between" color={String(tone)} position="relative">
               <Text color="muted" fontSize="sm">
                 {label}
               </Text>
               {icon}
             </Flex>
-            <Heading size="md" mt="3">
+            <Heading size="lg" mt="3" position="relative">
               {formatCurrencyBRL(Number(value))}
             </Heading>
-            <Text color="muted" fontSize="xs" mt="1">
+            <Flex mt="3" gap="2" align="center" position="relative">
+              <Badge colorScheme={variation >= 0 ? "green" : "red"}>
+                {variation >= 0 ? "+" : ""}
+                {variation.toFixed(1)}%
+              </Badge>
+              <Text color="muted" fontSize="xs">
+                vs. mês anterior
+              </Text>
+            </Flex>
+            <Text color="muted" fontSize="xs" mt="2" position="relative">
               {help}
             </Text>
           </Box>
-        ))}
+          );
+        })}
       </SimpleGrid>
+      {accounts.length > 0 && (
+        <Box {...panel} p="20px" mt="4">
+          <Flex justify="space-between" align={{ base: "flex-start", md: "center" }} direction={{ base: "column", md: "row" }} gap="3">
+            <Box>
+              <Heading size="sm">Saldo por conta</Heading>
+              <Text color="muted" fontSize="sm">
+                Total consolidado: {formatCurrencyBRL(accountTotal)}
+              </Text>
+            </Box>
+            <Button size="sm" variant="outline" onClick={() => onNavigate("contas")}>
+              Ver contas
+            </Button>
+          </Flex>
+          <SimpleGrid columns={{ base: 1, md: 3 }} spacing="3" mt="4">
+            {accounts.slice(0, 3).map((account) => (
+              <Box key={account.id} bg="panel2" p="4" borderRadius="xl" borderLeft="4px solid" borderColor={account.cor ?? "brand.400"}>
+                <Text color="muted" fontSize="xs">{account.tipo}</Text>
+                <Text fontWeight="800">{account.nome}</Text>
+                <Heading size="sm" mt="2">{formatCurrencyBRL(account.saldo)}</Heading>
+              </Box>
+            ))}
+          </SimpleGrid>
+        </Box>
+      )}
+      <Grid templateColumns={{ base: "1fr", xl: "1.15fr .85fr" }} gap="16px" mt="4">
+        <Box
+          {...panel}
+          p="24px"
+          bg="linear-gradient(135deg,rgba(15,98,254,.22),rgba(108,59,255,.12))"
+        >
+          <Flex justify="space-between" align={{ base: "flex-start", md: "center" }} direction={{ base: "column", md: "row" }} gap="4">
+            <Box>
+              <Text color="muted" fontSize="sm" fontWeight="700">
+                SAÚDE FINANCEIRA
+              </Text>
+              <Heading mt="2" size="lg">
+                {strategic.health.score}/100 · {strategic.health.scoreLabel}
+              </Heading>
+              <Text color="muted" mt="2">
+                {strategic.insights.at(-1)}
+              </Text>
+            </Box>
+            <Button variant="outline" onClick={() => onNavigate("saude")}>
+              Ver diagnóstico
+            </Button>
+          </Flex>
+          <Progress value={strategic.health.score} mt="5" h="10px" borderRadius="full" />
+          <SimpleGrid columns={{ base: 1, sm: 3 }} spacing="3" mt="5">
+            <Box bg="panel2" p="4" borderRadius="xl">
+              <Text color="muted" fontSize="xs">
+                Salário comprometido
+              </Text>
+              <Heading size="sm" mt="1">
+                {formatPercent(snapshot.incomeCommitment)}
+              </Heading>
+            </Box>
+            <Box bg="panel2" p="4" borderRadius="xl">
+              <Text color="muted" fontSize="xs">
+                Percentual economizado
+              </Text>
+              <Heading size="sm" mt="1">
+                {formatPercent(snapshot.savingsRate)}
+              </Heading>
+            </Box>
+            <Box bg="panel2" p="4" borderRadius="xl">
+              <Text color="muted" fontSize="xs">
+                Uso do cartão
+              </Text>
+              <Heading size="sm" mt="1">
+                {formatPercent(snapshot.cardSalaryPercent)}
+              </Heading>
+            </Box>
+          </SimpleGrid>
+        </Box>
+        <Box {...panel} p="24px">
+          <Heading size="sm">Próximos eventos</Heading>
+          <Text color="muted" fontSize="sm">
+            Calendário financeiro dos próximos dias
+          </Text>
+          <Stack mt="4" spacing="3">
+            {events.map((event) => (
+              <Flex key={event.id} justify="space-between" gap="3" bg="panel2" p="3" borderRadius="xl">
+                <Box>
+                  <Text fontSize="sm" fontWeight="700">
+                    {event.titulo}
+                  </Text>
+                  <Text color="muted" fontSize="xs">
+                    {formatDateBR(event.data)} · {event.tipo}
+                  </Text>
+                </Box>
+                <Text fontSize="sm" fontWeight="800">
+                  {formatCurrencyBRL(event.valor)}
+                </Text>
+              </Flex>
+            ))}
+            {!events.length && (
+              <Center py="8" color="muted" flexDir="column">
+                <CalendarDays />
+                <Text mt="2">Nenhum evento futuro neste mês.</Text>
+              </Center>
+            )}
+          </Stack>
+        </Box>
+      </Grid>
       <Grid
         templateColumns={{ base: "1fr", xl: "1.5fr 1fr" }}
         gap="16px"
@@ -367,6 +572,84 @@ export default function Dashboard({
           </Stack>
         </Box>
       </Grid>
+      <SimpleGrid columns={{ base: 1, lg: 3 }} spacing="4" mt="4">
+        <Box {...panel} p="20px">
+          <Flex justify="space-between" align="flex-start">
+            <Box>
+              <Heading size="sm">Faturas do mês</Heading>
+              <Text color="muted" fontSize="sm">
+                Cartão só afeta saldo quando a fatura é paga.
+              </Text>
+            </Box>
+            <CreditCard color="#9f7aea" />
+          </Flex>
+          <Heading size="lg" mt="5">
+            {formatCurrencyBRL(currentInvoice)}
+          </Heading>
+          <Progress
+            value={snapshot.cardSalaryPercent}
+            colorScheme={snapshot.cardSalaryPercent > 40 ? "red" : "purple"}
+            mt="4"
+            borderRadius="full"
+          />
+          <Flex mt="3" justify="space-between" color="muted" fontSize="sm">
+            <Text>{formatPercent(snapshot.cardSalaryPercent)} do salário</Text>
+            <Badge colorScheme={nextInvoice ? "orange" : "green"}>
+              {nextInvoice ? nextInvoice.status ?? "aberta" : "sem fatura"}
+            </Badge>
+          </Flex>
+          <Text mt="4" color="muted" fontSize="sm">
+            Próximo vencimento:{" "}
+            {nextInvoice ? formatDateBR(nextInvoice.data_vencimento) : "nenhum"}
+          </Text>
+        </Box>
+        <Box {...panel} p="20px">
+          <Heading size="sm">Investimentos</Heading>
+          <Text color="muted" fontSize="sm">
+            Aportes e patrimônio investido.
+          </Text>
+          <Heading size="lg" mt="5">
+            {formatCurrencyBRL(snapshot.investedTotal)}
+          </Heading>
+          <SimpleGrid columns={2} spacing="3" mt="4">
+            <Box bg="panel2" p="3" borderRadius="xl">
+              <Text color="muted" fontSize="xs">
+                Aplicado no mês
+              </Text>
+              <Text fontWeight="800">
+                {formatCurrencyBRL(snapshot.appliedInvestments)}
+              </Text>
+            </Box>
+            <Box bg="panel2" p="3" borderRadius="xl">
+              <Text color="muted" fontSize="xs">
+                Planejado
+              </Text>
+              <Text fontWeight="800">
+                {formatCurrencyBRL(snapshot.plannedInvestments)}
+              </Text>
+            </Box>
+          </SimpleGrid>
+        </Box>
+        <Box {...panel} p="20px">
+          <Heading size="sm">Resumo de compromissos</Heading>
+          <Text color="muted" fontSize="sm">
+            Despesas, recorrências, metas e investimentos previstos.
+          </Text>
+          <Stack mt="4">
+            {[
+              ["Despesas pendentes", snapshot.pendingExpenses],
+              ["Faturas abertas", snapshot.openInvoiceTotal],
+              ["Recorrências", snapshot.recurringCommitment],
+              ["Aportes planejados", snapshot.plannedContributions],
+            ].map(([label, value]) => (
+              <Flex key={String(label)} justify="space-between" bg="panel2" p="3" borderRadius="xl">
+                <Text fontSize="sm">{label}</Text>
+                <Text fontWeight="800">{formatCurrencyBRL(Number(value))}</Text>
+              </Flex>
+            ))}
+          </Stack>
+        </Box>
+      </SimpleGrid>
       <Grid templateColumns={{ base: "1fr", lg: "1fr 1fr" }} gap="4" mt="4">
         <Box {...panel} p="20px">
           <Flex justify="space-between" mb="4">
@@ -379,9 +662,9 @@ export default function Dashboard({
             <AlertTriangle color="#f7b84b" />
           </Flex>
           <Stack>
-            {snapshot.alerts.slice(0, 6).map((alert, index) => (
+            {strategic.alerts.slice(0, 6).map((alert) => (
               <Flex
-                key={`${alert.title}-${index}`}
+                key={alert.id}
                 bg="panel2"
                 p="3"
                 borderRadius="xl"
@@ -389,23 +672,29 @@ export default function Dashboard({
               >
                 <AlertTriangle
                   size={17}
-                  color={alert.type === "danger" ? "#f56565" : "#f7b84b"}
+                  color={alert.severity === "alta" ? "#f56565" : "#f7b84b"}
                 />
                 <Box>
                   <Text fontSize="sm" fontWeight="700">
                     {alert.title}
                   </Text>
                   <Text fontSize="xs" color="muted">
-                    {alert.description}
+                    {alert.action}
                   </Text>
                 </Box>
               </Flex>
             ))}
-            {!snapshot.alerts.length && (
+            {!strategic.alerts.length && (
               <Text color="muted" fontSize="sm">
                 Tudo tranquilo por aqui.
               </Text>
             )}
+            <Button size="sm" variant="outline" onClick={() => onNavigate("alertas")}>
+              Abrir central de alertas
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => onNavigate("notificacoes")}>
+              Ver notificações
+            </Button>
           </Stack>
         </Box>
         <Box {...panel} p="20px">
@@ -439,6 +728,26 @@ export default function Dashboard({
           </Flex>
         </Box>
       </Grid>
+      <Box {...panel} p="20px" mt="4">
+        <Flex justify="space-between" align={{ base: "flex-start", md: "center" }} direction={{ base: "column", md: "row" }} gap="3">
+          <Box>
+            <Heading size="sm">Assistente financeiro</Heading>
+            <Text color="muted" fontSize="sm">
+              Leituras automáticas do mês.
+            </Text>
+          </Box>
+          <Button size="sm" variant="outline" onClick={() => onNavigate("patrimonio")}>
+            Ver patrimônio
+          </Button>
+        </Flex>
+        <SimpleGrid columns={{ base: 1, md: 2, xl: 3 }} spacing="3" mt="4">
+          {strategic.insights.slice(0, 3).map((insight) => (
+            <Box key={insight} bg="panel2" p="4" borderRadius="xl">
+              <Text fontSize="sm">{insight}</Text>
+            </Box>
+          ))}
+        </SimpleGrid>
+      </Box>
     </>
   );
 }

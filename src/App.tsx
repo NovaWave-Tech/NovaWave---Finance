@@ -3,6 +3,7 @@ import {
   useMemo,
   useState,
   type FormEvent,
+  type ReactElement,
   type ReactNode,
 } from "react";
 import {
@@ -48,25 +49,31 @@ import {
   Textarea,
   Th,
   Thead,
+  Tooltip,
   Tr,
   useColorMode,
   useDisclosure,
   useToast,
 } from "@chakra-ui/react";
 import {
+  Activity,
   ArrowDownRight,
   ArrowUpRight,
+  BarChart3,
+  Bell,
   Calculator,
   CalendarDays,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   CircleDollarSign,
   CreditCard,
   Edit2,
   FileBarChart,
   Goal,
   Home,
+  Landmark,
   LogOut,
   Menu as MenuIcon,
   Moon,
@@ -74,6 +81,7 @@ import {
   ReceiptText,
   Repeat2,
   Search,
+  ShieldCheck,
   Sun,
   Tags,
   Trash2,
@@ -89,12 +97,14 @@ import GoalsPage from "./pages/Metas";
 import CalculatorPage from "./pages/Calculadora";
 import ProfilePage from "./pages/Perfil";
 import SpendingControlPage from "./pages/ControleGastos";
+import StrategicModule from "./pages/Strategic";
 import type { FinanceRecord, FinanceTable, Profile } from "./types/database";
 import { formatCurrencyBRL, formatDateBR } from "./utils/formatters";
 import { useAuth } from "./hooks/useAuth";
 import { BrandLogo } from "./components/brand/BrandLogo";
 import { CurrencyInput } from "./components/forms/CurrencyInput";
 import { DateInputBR } from "./components/forms/DateInputBR";
+import { ConfirmModal } from "./components/ui/ConfirmModal";
 
 type Page =
   | "dashboard"
@@ -109,6 +119,25 @@ type Page =
   | "controle"
   | "calculadora"
   | "relatorios"
+  | "saude"
+  | "projecoes"
+  | "alertas"
+  | "notificacoes"
+  | "comparativo"
+  | "reserva"
+  | "planejamento"
+  | "assinaturas"
+  | "transferencias"
+  | "assistente"
+  | "patrimonio"
+  | "movimentacoes"
+  | "timeline"
+  | "importacao"
+  | "fechamento"
+  | "orcamentos"
+  | "exportacao"
+  | "contas"
+  | "evolucao"
   | "perfil";
 type Kind = "receitas" | "despesas" | "metas_financeiras";
 type DataKind = FinanceTable;
@@ -150,6 +179,8 @@ const initialData: Record<DataKind, RecordData[]> = {
   eventos_financeiros: [],
   contas_recorrentes: [],
   categorias_financeiras: [],
+  contas_financeiras: [],
+  transferencias_internas: [],
 };
 const emptyForm: FormData = {
   descricao: "",
@@ -301,6 +332,29 @@ function useFinanceData(userId: string) {
   };
   const updateProfile = async (updated: Profile) => {
     setProfile(updated);
+    if (!updated.salario_recorrente) {
+      const currentMonth = new Date().toISOString().slice(0, 7);
+      const salary = data.receitas.find(
+        (item) =>
+          item.origem === "salario_perfil" &&
+          item.status === "pendente" &&
+          item.competencia?.startsWith(currentMonth),
+      );
+      if (salary) {
+        const canceled = await financeService.save(
+          "receitas",
+          { ...salary, status: "cancelada" },
+          userId,
+        );
+        setData((current) => ({
+          ...current,
+          receitas: current.receitas.map((item) =>
+            item.id === canceled.id ? canceled : item,
+          ),
+        }));
+      }
+      return;
+    }
     const salary = await financeService.ensureMonthlySalary(updated, userId);
     if (salary)
       setData((current) => ({
@@ -315,72 +369,297 @@ function useFinanceData(userId: string) {
   return { data, profile, loading, save, remove, updateProfile };
 }
 
-const nav: [Page, string, ReactNode][] = [
-  ["dashboard", "Dashboard", <Home size={19} />],
-  ["receitas", "Receitas", <ArrowUpRight size={19} />],
-  ["despesas", "Despesas", <ArrowDownRight size={19} />],
-  ["cartoes", "Cartões", <CreditCard size={19} />],
-  ["metas", "Metas", <Goal size={19} />],
-  ["investimentos", "Investimentos", <TrendingUp size={19} />],
-  ["calendario", "Calendário", <CalendarDays size={19} />],
-  ["recorrentes", "Recorrentes", <Repeat2 size={19} />],
-  ["categorias", "Categorias", <Tags size={19} />],
-  ["controle", "Controle de gastos", <ReceiptText size={19} />],
-  ["calculadora", "Calculadora", <Calculator size={19} />],
-  ["relatorios", "Relatórios", <FileBarChart size={19} />],
-  ["perfil", "Perfil", <UserRound size={19} />],
+type NavItem = [Page, string, ReactElement];
+type NavGroup = {
+  id: string;
+  label: string;
+  icon: ReactElement;
+  items: NavItem[];
+};
+const navGroups: NavGroup[] = [
+  {
+    id: "principal",
+    label: "Principal",
+    icon: <Home size={18} />,
+    items: [
+      ["dashboard", "Dashboard", <Home size={18} />],
+      ["calendario", "Calendário", <CalendarDays size={18} />],
+    ],
+  },
+  {
+    id: "financeiro",
+    label: "Financeiro",
+    icon: <Activity size={18} />,
+    items: [
+      ["movimentacoes", "Movimentações", <Activity size={18} />],
+      ["timeline", "Timeline", <CalendarDays size={18} />],
+      ["receitas", "Receitas", <ArrowUpRight size={18} />],
+      ["despesas", "Despesas", <ArrowDownRight size={18} />],
+      ["categorias", "Categorias", <Tags size={18} />],
+      ["importacao", "Importação Rápida", <Plus size={18} />],
+      ["recorrentes", "Recorrentes", <Repeat2 size={18} />],
+      ["assinaturas", "Assinaturas", <Repeat2 size={18} />],
+      ["transferencias", "Transferências", <Activity size={18} />],
+    ],
+  },
+  {
+    id: "cartoes",
+    label: "Cartões",
+    icon: <CreditCard size={18} />,
+    items: [["cartoes", "Cartões", <CreditCard size={18} />]],
+  },
+  {
+    id: "planejamento",
+    label: "Planejamento",
+    icon: <Goal size={18} />,
+    items: [
+      ["metas", "Metas", <Goal size={18} />],
+      ["reserva", "Reserva de Emergência", <ShieldCheck size={18} />],
+      ["orcamentos", "Orçamentos", <ReceiptText size={18} />],
+      ["projecoes", "Projeções", <TrendingUp size={18} />],
+    ],
+  },
+  {
+    id: "patrimonio",
+    label: "Patrimônio",
+    icon: <Landmark size={18} />,
+    items: [
+      ["contas", "Contas", <Landmark size={18} />],
+      ["investimentos", "Investimentos", <TrendingUp size={18} />],
+      ["patrimonio", "Patrimônio", <Landmark size={18} />],
+      ["evolucao", "Evolução Patrimonial", <BarChart3 size={18} />],
+    ],
+  },
+  {
+    id: "analises",
+    label: "Análises",
+    icon: <BarChart3 size={18} />,
+    items: [
+      ["controle", "Controle de Gastos", <ReceiptText size={18} />],
+      ["relatorios", "Relatórios", <FileBarChart size={18} />],
+      ["comparativo", "Comparativo", <BarChart3 size={18} />],
+      ["fechamento", "Fechamento Mensal", <CalendarDays size={18} />],
+      ["alertas", "Alertas", <Bell size={18} />],
+      ["notificacoes", "Notificações", <Bell size={18} />],
+      ["assistente", "Assistente", <CircleDollarSign size={18} />],
+      ["exportacao", "Exportação", <FileBarChart size={18} />],
+    ],
+  },
+  {
+    id: "sistema",
+    label: "Sistema",
+    icon: <UserRound size={18} />,
+    items: [
+      ["calculadora", "Calculadora", <Calculator size={18} />],
+      ["perfil", "Perfil", <UserRound size={18} />],
+    ],
+  },
 ];
+const nav = navGroups.flatMap((group) => group.items);
 function Sidebar({
   page,
   setPage,
   onClose,
+  email,
+  onLogout,
   collapsed = false,
 }: {
   page: Page;
   setPage: (p: Page) => void;
   onClose?: () => void;
+  email?: string;
+  onLogout?: () => void;
   collapsed?: boolean;
 }) {
+  const activeGroupId = navGroups.find((group) =>
+    group.items.some(([id]) => id === page),
+  )?.id;
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
+    const stored = localStorage.getItem("novawave-sidebar-groups");
+    if (stored) return JSON.parse(stored) as Record<string, boolean>;
+    return { principal: true };
+  });
+  const [manuallyClosedGroups, setManuallyClosedGroups] = useState<
+    Record<string, boolean>
+  >(() => {
+    const stored = localStorage.getItem("novawave-sidebar-closed-groups");
+    return stored ? (JSON.parse(stored) as Record<string, boolean>) : {};
+  });
+  const toggleGroup = (id: string) =>
+    setOpenGroups((current) => {
+      const isAutoOpen = id === activeGroupId && !manuallyClosedGroups[id];
+      const isOpen = Boolean(current[id] || isAutoOpen);
+      const willOpen = !isOpen;
+      const next = { ...current, [id]: willOpen };
+      localStorage.setItem("novawave-sidebar-groups", JSON.stringify(next));
+      setManuallyClosedGroups((closed) => {
+        const updated = { ...closed, [id]: !willOpen };
+        if (willOpen) delete updated[id];
+        localStorage.setItem(
+          "novawave-sidebar-closed-groups",
+          JSON.stringify(updated),
+        );
+        return updated;
+      });
+      return next;
+    });
+  const go = (id: Page) => {
+    setPage(id);
+    onClose?.();
+  };
+  const isGroupActive = (group: NavGroup) =>
+    group.items.some(([id]) => id === page);
+  const compactItems = nav.filter(
+    ([id], index, self) => self.findIndex(([other]) => other === id) === index,
+  );
   return (
     <Flex
       h="full"
       direction="column"
-      p={collapsed ? "24px 10px" : "24px 16px"}
+      p={collapsed ? "16px 10px" : "18px 14px"}
       bg="panel"
       borderRight="1px solid"
       borderColor="line"
+      overflow="hidden"
     >
-      <Box px={collapsed ? "8px" : "6px"} mb="42px">
+      <Flex
+        px={collapsed ? "4px" : "6px"}
+        pb="16px"
+        mb="12px"
+        borderBottom="1px solid"
+        borderColor="line"
+        align="center"
+        justify={collapsed ? "center" : "space-between"}
+        flexShrink={0}
+      >
         <BrandLogo compact={collapsed} size={42} />
+      </Flex>
+      <Box
+        flex="1"
+        overflowY="auto"
+        overflowX="hidden"
+        pr={collapsed ? "0" : "4px"}
+        sx={{
+          "&::-webkit-scrollbar": { width: "6px" },
+          "&::-webkit-scrollbar-thumb": {
+            background: "rgba(148,163,184,.28)",
+            borderRadius: "999px",
+          },
+        }}
+      >
+        {collapsed ? (
+          <Stack spacing="6px" align="center">
+            {compactItems.map(([id, label, icon]) => (
+              <Tooltip key={id} label={label} placement="right" hasArrow>
+                <IconButton
+                  aria-label={label}
+                  icon={icon}
+                  onClick={() => go(id)}
+                  variant={page === id ? "solid" : "ghost"}
+                  colorScheme={page === id ? "blue" : undefined}
+                  color={page === id ? "white" : "muted"}
+                />
+              </Tooltip>
+            ))}
+          </Stack>
+        ) : (
+          <Stack spacing="8px">
+            {navGroups.map((group) => {
+              const active = isGroupActive(group);
+              const open = Boolean(
+                openGroups[group.id] ||
+                  (active && !manuallyClosedGroups[group.id]),
+              );
+              return (
+                <Box key={group.id}>
+                  <Button
+                    w="full"
+                    variant="ghost"
+                    justifyContent="space-between"
+                    color={active ? "textMain" : "muted"}
+                    bg={active ? "rgba(15,98,254,.10)" : "transparent"}
+                    _hover={{ bg: "panel2", color: "textMain" }}
+                    onClick={() => toggleGroup(group.id)}
+                    leftIcon={group.icon}
+                    rightIcon={open ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+                  >
+                    <Text flex="1" textAlign="left" fontSize="sm">
+                      {group.label}
+                    </Text>
+                  </Button>
+                  {open && (
+                    <Stack spacing="4px" mt="5px" pl="3">
+                      {group.items.map(([id, label, icon], index) => {
+                        const itemActive = page === id;
+                        return (
+                          <Button
+                            key={`${group.id}-${id}-${label}-${index}`}
+                            onClick={() => go(id)}
+                            justifyContent="flex-start"
+                            gap="10px"
+                            h="40px"
+                            variant="ghost"
+                            fontSize="sm"
+                            color={itemActive ? "white" : "muted"}
+                            bg={
+                              itemActive
+                                ? "linear-gradient(90deg,rgba(15,98,254,.32),rgba(108,59,255,.12))"
+                                : "transparent"
+                            }
+                            borderLeft="2px solid"
+                            borderColor={itemActive ? "brand.400" : "transparent"}
+                            _hover={{ bg: "panel2", color: "textMain" }}
+                          >
+                            {icon}
+                            {label}
+                          </Button>
+                        );
+                      })}
+                    </Stack>
+                  )}
+                </Box>
+              );
+            })}
+          </Stack>
+        )}
       </Box>
-      <Stack spacing="5px">
-        {nav.map(([id, label, icon]) => (
-          <Button
-            key={id}
-            onClick={() => {
-              setPage(id);
-              onClose?.();
-            }}
-            justifyContent={collapsed ? "center" : "flex-start"}
-            gap="12px"
-            px={collapsed ? "0" : "16px"}
-            h="46px"
-            variant="ghost"
-            color={page === id ? "white" : "muted"}
-            bg={
-              page === id
-                ? "linear-gradient(90deg,rgba(15,98,254,.28),rgba(108,59,255,.12))"
-                : "transparent"
-            }
-            borderLeft="2px solid"
-            borderColor={page === id ? "brand.400" : "transparent"}
-            _hover={{ bg: "panel2", color: "textMain" }}
-          >
-            {icon}
-            {!collapsed && label}
-          </Button>
-        ))}
-      </Stack>
+      <Box
+        pt="14px"
+        mt="14px"
+        borderTop="1px solid"
+        borderColor="line"
+        flexShrink={0}
+      >
+        {collapsed ? (
+          <Tooltip label={email ?? "Minha conta"} placement="right" hasArrow>
+            <IconButton
+              aria-label="Sair"
+              icon={<LogOut size={17} />}
+              variant="ghost"
+              onClick={onLogout}
+            />
+          </Tooltip>
+        ) : (
+          <Flex align="center" gap="3">
+            <Avatar size="sm" name={email} />
+            <Box minW="0" flex="1">
+              <Text fontSize="sm" noOfLines={1}>
+                Minha conta
+              </Text>
+              <Text fontSize="xs" color="muted" noOfLines={1}>
+                {email}
+              </Text>
+            </Box>
+            <IconButton
+              aria-label="Sair"
+              icon={<LogOut size={16} />}
+              size="sm"
+              variant="ghost"
+              onClick={onLogout}
+            />
+          </Flex>
+        )}
+      </Box>
     </Flex>
   );
 }
@@ -391,14 +670,17 @@ function Shell({
   email,
   onLogout,
   children,
+  data,
 }: {
   page: Page;
   setPage: (p: Page) => void;
   email: string;
   onLogout: () => void;
   children: ReactNode;
+  data?: Record<DataKind, RecordData[]>;
 }) {
   const mobile = useDisclosure();
+  const [globalQuery, setGlobalQuery] = useState("");
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem("novawave-sidebar-collapsed") === "true",
   );
@@ -408,6 +690,61 @@ function Shell({
       return !value;
     });
   const { colorMode, toggleColorMode } = useColorMode();
+  const searchResults = useMemo(() => {
+    const query = globalQuery.trim().toLowerCase();
+    if (!query || !data) return [];
+    const pageByTable: Partial<Record<DataKind, Page>> = {
+      receitas: "receitas",
+      despesas: "despesas",
+      cartoes: "cartoes",
+      compras_cartao: "cartoes",
+      parcelas_cartao: "cartoes",
+      faturas_cartao: "cartoes",
+      metas_financeiras: "metas",
+      aportes_metas: "metas",
+      investimentos: "investimentos",
+      movimentacoes_investimentos: "investimentos",
+      contas_recorrentes: "recorrentes",
+      categorias_financeiras: "categorias",
+      eventos_financeiros: "calendario",
+      orcamentos_categoria: "controle",
+    };
+    const rows = (Object.keys(data) as DataKind[]).flatMap((table) =>
+      data[table]
+        .filter((item) =>
+          [
+            item.descricao,
+            item.nome,
+            item.titulo,
+            item.categoria,
+            item.tipo,
+            item.status,
+            item.banco,
+            item.instituicao,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase()
+            .includes(query),
+        )
+        .slice(0, 4)
+        .map((item) => ({
+          id: `${table}-${item.id}`,
+          title: item.descricao || item.nome || item.titulo || "Registro",
+          subtitle: `${table.replaceAll("_", " ")} · ${item.categoria ?? item.status ?? ""}`,
+          page: pageByTable[table] ?? "dashboard",
+        })),
+    );
+    const modules = nav
+      .filter(([, label]) => label.toLowerCase().includes(query))
+      .map(([id, label]) => ({
+        id: `nav-${id}`,
+        title: label,
+        subtitle: "Módulo do sistema",
+        page: id,
+      }));
+    return [...modules, ...rows].slice(0, 8);
+  }, [data, globalQuery]);
   return (
     <Flex minH="100vh">
       <Box
@@ -417,7 +754,13 @@ function Shell({
         position="fixed"
         insetY="0"
       >
-        <Sidebar page={page} setPage={setPage} collapsed={collapsed} />
+        <Sidebar
+          page={page}
+          setPage={setPage}
+          collapsed={collapsed}
+          email={email}
+          onLogout={onLogout}
+        />
       </Box>
       <Box
         flex="1"
@@ -460,16 +803,56 @@ function Shell({
               onClick={mobile.onOpen}
             />
             <Box display={{ base: "none", md: "block" }}>
-              <InputGroup size="sm" w="280px">
+              <Box position="relative">
+              <InputGroup size="sm" w="320px">
                 <InputLeftElement>
                   <Search size={16} />
                 </InputLeftElement>
                 <Input
-                  placeholder="Buscar transações..."
+                  placeholder="Buscar em todo o sistema..."
+                  value={globalQuery}
+                  onChange={(e) => setGlobalQuery(e.target.value)}
                   bg="panel"
                   borderColor="line"
                 />
               </InputGroup>
+              {searchResults.length > 0 && (
+                <Box
+                  position="absolute"
+                  top="42px"
+                  w="full"
+                  bg="panel"
+                  border="1px solid"
+                  borderColor="line"
+                  borderRadius="xl"
+                  boxShadow="xl"
+                  overflow="hidden"
+                >
+                  {searchResults.map((item) => (
+                    <Button
+                      key={item.id}
+                      variant="ghost"
+                      w="full"
+                      h="auto"
+                      justifyContent="flex-start"
+                      p="3"
+                      borderRadius="0"
+                      onClick={() => {
+                        setPage(item.page);
+                        setGlobalQuery("");
+                      }}
+                    >
+                      <Box textAlign="left">
+                        <Text fontSize="sm">{item.title}</Text>
+                        <Text fontSize="xs" color="muted">
+                          {item.subtitle}
+                        </Text>
+                      </Box>
+                    </Button>
+                  ))}
+                </Box>
+              )}
+              </Box>
             </Box>
           </Flex>
           <Flex align="center" gap="8px">
@@ -516,11 +899,79 @@ function Shell({
           {children}
         </Box>
       </Box>
+      <Box
+        display={{ base: "block", md: "none" }}
+        position="fixed"
+        right="18px"
+        bottom="18px"
+        zIndex="20"
+      >
+        <Menu placement="top-end">
+          <MenuButton
+            as={IconButton}
+            aria-label="Ações rápidas"
+            icon={<Plus size={22} />}
+            borderRadius="full"
+            size="lg"
+            boxShadow="xl"
+          />
+          <MenuList bg="panel" borderColor="line">
+            <MenuItem
+              bg="transparent"
+              icon={<ArrowUpRight size={16} />}
+              onClick={() => setPage("receitas")}
+            >
+              Nova receita
+            </MenuItem>
+            <MenuItem
+              bg="transparent"
+              icon={<ArrowDownRight size={16} />}
+              onClick={() => setPage("despesas")}
+            >
+              Nova despesa
+            </MenuItem>
+            <MenuItem
+              bg="transparent"
+              icon={<CreditCard size={16} />}
+              onClick={() => setPage("cartoes")}
+            >
+              Nova compra
+            </MenuItem>
+            <MenuItem
+              bg="transparent"
+              icon={<Activity size={16} />}
+              onClick={() => setPage("transferencias")}
+            >
+              Nova transferência
+            </MenuItem>
+            <MenuItem
+              bg="transparent"
+              icon={<Goal size={16} />}
+              onClick={() => setPage("metas")}
+            >
+              Novo aporte
+            </MenuItem>
+            <MenuItem
+              bg="transparent"
+              icon={<TrendingUp size={16} />}
+              onClick={() => setPage("investimentos")}
+            >
+              Novo investimento
+            </MenuItem>
+          </MenuList>
+        </Menu>
+      </Box>
       <Drawer isOpen={mobile.isOpen} placement="left" onClose={mobile.onClose}>
         <DrawerOverlay />
         <DrawerContent maxW="270px">
           <DrawerBody p="0">
-            <Sidebar page={page} setPage={setPage} onClose={mobile.onClose} />
+            <Sidebar
+              page={page}
+              setPage={setPage}
+              onClose={mobile.onClose}
+              email={email}
+              onLogout={onLogout}
+            />
           </DrawerBody>
         </DrawerContent>
       </Drawer>
@@ -642,6 +1093,8 @@ function CrudPage({
   const [cat, setCat] = useState("");
   const [month, setMonth] = useState("");
   const [method, setMethod] = useState("");
+  const [pendingDelete, setPendingDelete] = useState<RecordData | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const open = (item?: RecordData) => {
     setEditing(item || null);
     setForm(
@@ -718,17 +1171,21 @@ function CrudPage({
       });
     }
   };
-  const del = async (id: string) => {
-    if (!confirm("Tem certeza que deseja excluir este registro?")) return;
+  const del = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
     try {
-      await onRemove(id);
+      await onRemove(pendingDelete.id);
       toast({ title: "Registro excluído", status: "success" });
+      setPendingDelete(null);
     } catch (err) {
       toast({
         title: "Erro ao excluir",
         description: (err as Error).message,
         status: "error",
       });
+    } finally {
+      setDeleting(false);
     }
   };
   const f =
@@ -923,7 +1380,7 @@ function CrudPage({
                         colorScheme="red"
                         variant="ghost"
                         size="sm"
-                        onClick={() => del(x.id)}
+                        onClick={() => setPendingDelete(x)}
                       />
                     </Flex>
                   </Td>
@@ -1150,6 +1607,21 @@ function CrudPage({
           </ModalFooter>
         </ModalContent>
       </Modal>
+      <ConfirmModal
+        isOpen={Boolean(pendingDelete)}
+        onClose={() => setPendingDelete(null)}
+        onConfirm={() => void del()}
+        title={`Excluir ${cfg.singular}`}
+        description="Essa ação remove o lançamento real do banco e atualiza dashboard, relatórios e calendário automaticamente."
+        itemName={pendingDelete?.descricao || pendingDelete?.nome}
+        impact={
+          pendingDelete?.origem?.startsWith("recorrencia:")
+            ? "Este lançamento foi gerado por uma recorrência. Ao excluir, a recorrência poderá gerar novamente a previsão do mês."
+            : "Confira se este registro não é usado como referência em outro controle financeiro."
+        }
+        confirmLabel="Confirmar exclusão"
+        isLoading={deleting}
+      />
     </>
   );
 }
@@ -1228,17 +1700,78 @@ export default function App() {
       );
     if (page === "calculadora") return <CalculatorPage />;
     if (page === "controle") return <SpendingControlPage data={finance.data} />;
+    if (
+      [
+        "saude",
+        "projecoes",
+        "alertas",
+        "notificacoes",
+        "comparativo",
+        "reserva",
+        "planejamento",
+        "assinaturas",
+        "transferencias",
+        "assistente",
+        "patrimonio",
+        "movimentacoes",
+        "timeline",
+        "importacao",
+        "fechamento",
+        "orcamentos",
+        "exportacao",
+        "contas",
+        "evolucao",
+      ].includes(page)
+    )
+      return (
+        <StrategicModule
+          page={
+            page as
+              | "saude"
+              | "projecoes"
+              | "alertas"
+              | "notificacoes"
+              | "comparativo"
+              | "reserva"
+              | "planejamento"
+              | "assinaturas"
+              | "transferencias"
+              | "assistente"
+              | "patrimonio"
+              | "movimentacoes"
+              | "timeline"
+              | "importacao"
+              | "fechamento"
+              | "orcamentos"
+              | "exportacao"
+              | "contas"
+              | "evolucao"
+          }
+          data={finance.data}
+          profile={finance.profile}
+          save={finance.save}
+        />
+      );
     if (page === "perfil")
       return (
         <ProfilePage
           userId={user?.id ?? ""}
           email={user?.email ?? ""}
           onUpdated={finance.updateProfile}
+          data={finance.data}
         />
       );
     return (
       <OperationalModule
-        page={page}
+        page={
+          page as
+            | "cartoes"
+            | "investimentos"
+            | "calendario"
+            | "recorrentes"
+            | "categorias"
+            | "relatorios"
+        }
         data={finance.data}
         profile={finance.profile}
         save={finance.save}
@@ -1258,6 +1791,7 @@ export default function App() {
       setPage={setPage}
       email={user.email ?? ""}
       onLogout={logout}
+      data={finance.data}
     >
       {content}
     </Shell>

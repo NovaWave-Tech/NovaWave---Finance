@@ -1,13 +1,22 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import {
   Badge,
   Box,
   Button,
   Center,
+  Divider,
+  Drawer,
+  DrawerBody,
+  DrawerCloseButton,
+  DrawerContent,
+  DrawerFooter,
+  DrawerHeader,
+  DrawerOverlay,
   Flex,
   FormControl,
   FormLabel,
   Heading,
+  HStack,
   IconButton,
   Input,
   Modal,
@@ -24,6 +33,8 @@ import {
   StatHelpText,
   StatLabel,
   StatNumber,
+  Tag,
+  TagLabel,
   Table,
   TableContainer,
   Tbody,
@@ -38,6 +49,9 @@ import {
 } from "@chakra-ui/react";
 import {
   CalendarDays,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   CreditCard,
   Edit2,
   FileBarChart,
@@ -55,9 +69,16 @@ import type {
 import { formatCurrency } from "../../utils/formatters";
 import { formatDateBR, todayISO } from "../../utils/date";
 import { calculateFinancialSnapshot } from "../../services/financialEngine";
+import {
+  CALENDAR_SKIP_TYPE,
+  calendarExceptionKey,
+  isCalendarSkipEvent,
+} from "../../services/calendarExceptions";
 import { CurrencyInput } from "../../components/forms/CurrencyInput";
 import { calculateAvailableLimit } from "../../utils/calculations";
 import { buildFinancialCalendar } from "../../services/calendarService";
+import { ConfirmModal } from "../../components/ui/ConfirmModal";
+import { DateInputBR } from "../../components/forms/DateInputBR";
 
 type Data = Record<FinanceTable, FinanceRecord[]>;
 type ModulePage =
@@ -175,9 +196,18 @@ function Editor({
                 >
                   <option value="">Selecione</option>
                   {field.options?.map((option) => (
-                    <option key={option}>{option}</option>
+                    <option key={option} value={option}>
+                      {option.includes("|") ? option.split("|")[1] : option}
+                    </option>
                   ))}
                 </Select>
+              ) : field.type === "date" ? (
+                <DateInputBR
+                  value={form[field.key]}
+                  onChange={(e) =>
+                    setForm({ ...form, [field.key]: e.target.value })
+                  }
+                />
               ) : field.type === "textarea" ? (
                 <Textarea
                   value={form[field.key]}
@@ -240,6 +270,8 @@ function EntitySection({
   const modal = useDisclosure();
   const [editing, setEditing] = useState<FinanceRecord>();
   const [filter, setFilter] = useState<Record<string, string>>({});
+  const [pendingDelete, setPendingDelete] = useState<FinanceRecord>();
+  const [deleting, setDeleting] = useState(false);
   const toast = useToast();
   const open = (item?: FinanceRecord) => {
     setEditing(item);
@@ -255,17 +287,21 @@ function EntitySection({
           ) !== filter[field.key],
       ),
   );
-  const remove = async (id: string) => {
-    if (!confirm("Confirma a exclusão deste registro?")) return;
+  const remove = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
     try {
-      await onRemove(id);
+      await onRemove(pendingDelete.id);
       toast({ title: "Registro excluído", status: "success" });
+      setPendingDelete(undefined);
     } catch (error) {
       toast({
         title: "Erro ao excluir",
         description: (error as Error).message,
         status: "error",
       });
+    } finally {
+      setDeleting(false);
     }
   };
   return (
@@ -346,7 +382,7 @@ function EntitySection({
                       variant="ghost"
                       colorScheme="red"
                       size="sm"
-                      onClick={() => remove(item.id)}
+                      onClick={() => setPendingDelete(item)}
                     />
                   </Flex>
                 </Td>
@@ -376,6 +412,21 @@ function EntitySection({
           />
         </ModalContent>
       </Modal>
+      <ConfirmModal
+        isOpen={Boolean(pendingDelete)}
+        onClose={() => setPendingDelete(undefined)}
+        onConfirm={() => void remove()}
+        title={`Excluir ${singular}`}
+        description="Essa ação remove o registro real do banco e recalcula os módulos conectados."
+        itemName={pendingDelete?.descricao || pendingDelete?.nome || pendingDelete?.titulo}
+        impact={
+          title.toLowerCase().includes("compra")
+            ? "Esta compra pode possuir parcelas vinculadas. Confira as parcelas futuras após a exclusão."
+            : "Se existirem dados relacionados, eles podem mudar os totais, faturas, metas ou relatórios."
+        }
+        confirmLabel="Confirmar exclusão"
+        isLoading={deleting}
+      />
     </Box>
   );
 }
@@ -552,6 +603,16 @@ function InvoicesPanel({
   save: (table: FinanceTable, item: FinanceRecord) => Promise<void>;
 }) {
   const toast = useToast();
+  const [selectedInvoice, setSelectedInvoice] = useState<
+    | {
+        cartao_id: string;
+        competencia: string;
+        valor: number;
+        parcelas: FinanceRecord[];
+      }
+    | undefined
+  >();
+  const [paying, setPaying] = useState(false);
   const groups = Object.values(
     data.parcelas_cartao
       .filter(
@@ -587,7 +648,7 @@ function InvoicesPanel({
       }, {}),
   ).sort((a, b) => a.competencia.localeCompare(b.competencia));
   const pay = async (group: (typeof groups)[number]) => {
-    if (!confirm(`Pagar fatura de ${formatCurrency(group.valor)}?`)) return;
+    setPaying(true);
     const card = data.cartoes.find((x) => x.id === group.cartao_id);
     const competence = group.competencia.slice(0, 7);
     const due = `${competence}-${String(card?.dia_vencimento ?? 1).padStart(2, "0")}`;
@@ -620,12 +681,15 @@ function InvoicesPanel({
         tipo: "pagamento_cartao",
       });
       toast({ title: "Fatura paga e saldo atualizado", status: "success" });
+      setSelectedInvoice(undefined);
     } catch (error) {
       toast({
         title: "Erro ao pagar fatura",
         description: (error as Error).message,
         status: "error",
       });
+    } finally {
+      setPaying(false);
     }
   };
   return (
@@ -659,7 +723,7 @@ function InvoicesPanel({
                 <Td>{group.competencia.slice(0, 7)}</Td>
                 <Td isNumeric>{formatCurrency(group.valor)}</Td>
                 <Td textAlign="right">
-                  <Button size="sm" onClick={() => void pay(group)}>
+                  <Button size="sm" onClick={() => setSelectedInvoice(group)}>
                     Pagar fatura
                   </Button>
                 </Td>
@@ -677,6 +741,22 @@ function InvoicesPanel({
           </Tbody>
         </Table>
       </TableContainer>
+      <ConfirmModal
+        isOpen={Boolean(selectedInvoice)}
+        onClose={() => setSelectedInvoice(undefined)}
+        onConfirm={() => selectedInvoice && void pay(selectedInvoice)}
+        title="Pagar fatura"
+        description="Ao confirmar, a fatura será marcada como paga, as parcelas serão baixadas e uma despesa de pagamento de cartão será registrada."
+        itemName={
+          selectedInvoice
+            ? `${data.cartoes.find((x) => x.id === selectedInvoice.cartao_id)?.nome ?? "Cartão"} · ${formatCurrency(selectedInvoice.valor)}`
+            : undefined
+        }
+        impact="Essa ação afeta saldo real, limite disponível, relatórios e calendário financeiro."
+        confirmLabel="Confirmar pagamento"
+        colorScheme="green"
+        isLoading={paying}
+      />
     </Box>
   );
 }
@@ -1268,9 +1348,445 @@ function Reports({ data, profile }: { data: Data; profile?: Profile | null }) {
   );
 }
 
-function FinancialCalendar({ data }: { data: Data }) {
+const calendarFilters = [
+  "Todos",
+  "Receitas",
+  "Despesas",
+  "Cartões",
+  "Faturas",
+  "Metas",
+  "Investimentos",
+  "Recorrentes",
+  "Pendentes",
+  "Pagos/Recebidos",
+  "Atrasados",
+];
+
+const typeTone = (type?: string) => {
+  const value = (type ?? "").toLowerCase();
+  if (value.includes("receita") || value.includes("salário"))
+    return { color: "green", bg: "rgba(72,187,120,.14)", border: "green.400" };
+  if (value.includes("despesa"))
+    return { color: "red", bg: "rgba(245,101,101,.14)", border: "red.400" };
+  if (
+    value.includes("cartão") ||
+    value.includes("cartao") ||
+    value.includes("fatura") ||
+    value.includes("fechamento")
+  )
+    return { color: "purple", bg: "rgba(159,122,234,.15)", border: "purple.400" };
+  if (value.includes("meta") || value.includes("aporte"))
+    return { color: "blue", bg: "rgba(66,153,225,.15)", border: "blue.400" };
+  if (value.includes("investimento") || value.includes("resgate"))
+    return { color: "yellow", bg: "rgba(236,201,75,.16)", border: "yellow.400" };
+  return { color: "gray", bg: "rgba(160,174,192,.14)", border: "gray.400" };
+};
+
+const eventMatchesFilter = (event: FinanceRecord, filter: string) => {
+  if (filter === "Todos") return true;
+  const type = (event.tipo ?? "").toLowerCase();
+  const status = (event.status ?? "pendente").toLowerCase();
+  const isOverdue =
+    ["pendente", "atrasado", "prevista", "previsto"].includes(status) &&
+    (event.data ?? "") < todayISO();
+  if (filter === "Receitas")
+    return type.includes("receita") || type.includes("salário");
+  if (filter === "Despesas") return type.includes("despesa");
+  if (filter === "Cartões" || filter === "Faturas")
+    return type.includes("cartão") || type.includes("cartao") || type.includes("fatura");
+  if (filter === "Metas") return type.includes("meta") || type.includes("aporte");
+  if (filter === "Investimentos")
+    return type.includes("investimento") || type.includes("resgate");
+  if (filter === "Recorrentes")
+    return event.origem === "contas_recorrentes" || type.includes("recorrente");
+  if (filter === "Pendentes")
+    return ["pendente", "prevista", "previsto", "aberta"].includes(status);
+  if (filter === "Pagos/Recebidos")
+    return ["pago", "paga", "recebida", "confirmado", "confirmada"].includes(status);
+  if (filter === "Atrasados") return isOverdue;
+  return true;
+};
+
+const sourceFromEvent = (event: FinanceRecord) => {
+  const [table, ...idParts] = event.id.split(":");
+  const suffix = idParts.at(-1);
+  const id =
+    suffix?.includes("previsto") || suffix === "fechamento"
+      ? idParts.slice(0, -1).join(":")
+      : idParts.join(":");
+  return { table: table as FinanceTable, id };
+};
+
+const isDerivedCalendarEvent = (event: FinanceRecord) =>
+  event.id.includes(":fechamento") ||
+  event.id.includes(":vencimento-previsto") ||
+  event.origem === "metas_financeiras" ||
+  event.origem === "contas_recorrentes" ||
+  event.origem === "parcelas_cartao" ||
+  event.origem === "cartoes" ||
+  event.origem === "profile_salary" ||
+  event.is_virtual ||
+  event.source === "profile_salary" ||
+  event.status === "previsto";
+
+const isSalaryCalendarEvent = (event: FinanceRecord) => {
+  const text = `${event.titulo ?? ""} ${event.tipo ?? ""}`.toLowerCase();
+  return text.includes("salário") || text.includes("salario");
+};
+
+const isMonthlySkippableEvent = (event: FinanceRecord) =>
+  event.origem === "profile_salary" ||
+  isSalaryCalendarEvent(event) ||
+  ([
+    "metas_financeiras",
+    "contas_recorrentes",
+    "parcelas_cartao",
+    "cartoes",
+    "movimentacoes_investimentos",
+  ].includes(event.origem ?? "") &&
+    !["pago", "paga", "recebida", "confirmado", "confirmada"].includes(
+      event.status ?? "",
+    ));
+
+const calendarEditFieldsByTable = (table?: FinanceTable): Field[] => {
+  if (table === "receitas")
+    return [
+      { key: "descricao", label: "Descrição", required: true },
+      { key: "valor", label: "Valor", type: "number", required: true },
+      { key: "data", label: "Data", type: "date", required: true },
+      {
+        key: "status",
+        label: "Status",
+        type: "select",
+        required: true,
+        options: ["pendente", "recebida", "cancelada"],
+      },
+      { key: "observacao", label: "Observação", type: "textarea" },
+    ];
+  if (table === "despesas")
+    return [
+      { key: "descricao", label: "Descrição", required: true },
+      { key: "valor", label: "Valor", type: "number", required: true },
+      { key: "data", label: "Data", type: "date", required: true },
+      {
+        key: "status",
+        label: "Status",
+        type: "select",
+        required: true,
+        options: ["pendente", "pago", "atrasado", "cancelado"],
+      },
+      { key: "observacao", label: "Observação", type: "textarea" },
+    ];
+  if (table === "faturas_cartao")
+    return [
+      { key: "valor", label: "Valor", type: "number", required: true },
+      { key: "data_vencimento", label: "Vencimento", type: "date" },
+      { key: "paga_em", label: "Pago em", type: "date" },
+      {
+        key: "status",
+        label: "Status",
+        type: "select",
+        required: true,
+        options: ["aberta", "fechada", "paga", "atrasada", "cancelada"],
+      },
+      { key: "observacao", label: "Observação", type: "textarea" },
+    ];
+  if (table === "aportes_metas" || table === "movimentacoes_investimentos")
+    return [
+      { key: "valor", label: "Valor", type: "number", required: true },
+      { key: "data", label: "Data", type: "date", required: true },
+      {
+        key: "status",
+        label: "Status",
+        type: "select",
+        required: true,
+        options: ["pendente", "confirmado", "confirmada", "cancelada"],
+      },
+      { key: "observacao", label: "Observação", type: "textarea" },
+    ];
+  return [
+    { key: "descricao", label: "Descrição" },
+    { key: "nome", label: "Nome" },
+    { key: "valor", label: "Valor", type: "number" },
+    { key: "data", label: "Data", type: "date" },
+    { key: "status", label: "Status" },
+    { key: "observacao", label: "Observação", type: "textarea" },
+  ];
+};
+
+function EventPill({ event }: { event: FinanceRecord }) {
+  const tone = typeTone(event.tipo);
+  return (
+    <Tag
+      size="sm"
+      w="full"
+      justifyContent="flex-start"
+      bg={tone.bg}
+      borderLeft="3px solid"
+      borderColor={tone.border}
+      borderRadius="md"
+      color="textMain"
+      title={`${event.titulo} · ${formatCurrency(event.valor)}`}
+    >
+      <TagLabel overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">
+        {event.titulo} · {formatCurrency(event.valor)}
+      </TagLabel>
+    </Tag>
+  );
+}
+
+function FinancialCalendar({
+  data,
+  save,
+  remove,
+  profile,
+}: {
+  data: Data;
+  save: (table: FinanceTable, item: FinanceRecord) => Promise<void>;
+  remove: (table: FinanceTable, id: string) => Promise<void>;
+  profile?: Profile | null;
+}) {
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
-  const events = buildFinancialCalendar(data, month);
+  const [filter, setFilter] = useState("Todos");
+  const [selectedDate, setSelectedDate] = useState<string>();
+  const [addKind, setAddKind] = useState<"receita" | "despesa" | "recorrente">();
+  const [editing, setEditing] = useState<FinanceRecord>();
+  const [pendingDelete, setPendingDelete] = useState<FinanceRecord>();
+  const [deleting, setDeleting] = useState(false);
+  const toast = useToast();
+  const drawer = useDisclosure();
+  const addModal = useDisclosure();
+  const editModal = useDisclosure();
+  const allEvents = useMemo(
+    () => buildFinancialCalendar(data, month, profile),
+    [data, month, profile],
+  );
+  const events = allEvents.filter((event) => eventMatchesFilter(event, filter));
+  const byDate = events.reduce<Record<string, FinanceRecord[]>>((acc, item) => {
+    if (!item.data) return acc;
+    acc[item.data] ??= [];
+    acc[item.data].push(item);
+    return acc;
+  }, {});
+  const [year, monthIndex] = month.split("-").map(Number);
+  const firstDay = new Date(year, monthIndex - 1, 1);
+  const daysInMonth = new Date(year, monthIndex, 0).getDate();
+  const cells = [
+    ...Array.from({ length: firstDay.getDay() }, () => null),
+    ...Array.from({ length: daysInMonth }, (_, index) => index + 1),
+  ];
+  const today = todayISO();
+  const selectedEvents = selectedDate ? byDate[selectedDate] ?? [] : [];
+  const totalReceivable = allEvents
+    .filter((event) => eventMatchesFilter(event, "Receitas"))
+    .reduce((sum, event) => sum + (event.valor ?? 0), 0);
+  const totalPayable = allEvents
+    .filter(
+      (event) =>
+        eventMatchesFilter(event, "Despesas") ||
+        eventMatchesFilter(event, "Faturas") ||
+        eventMatchesFilter(event, "Metas") ||
+        eventMatchesFilter(event, "Investimentos"),
+    )
+    .reduce((sum, event) => sum + (event.valor ?? 0), 0);
+  const pending = allEvents.filter((event) =>
+    eventMatchesFilter(event, "Pendentes"),
+  ).length;
+  const selectedReceivable = selectedEvents
+    .filter((event) => eventMatchesFilter(event, "Receitas"))
+    .reduce((sum, event) => sum + (event.valor ?? 0), 0);
+  const selectedPayable = selectedEvents
+    .filter((event) => !eventMatchesFilter(event, "Receitas"))
+    .reduce((sum, event) => sum + (event.valor ?? 0), 0);
+  const skippedThisMonth = data.eventos_financeiros.filter(
+    (event) =>
+      isCalendarSkipEvent(event) &&
+      (event.competencia?.startsWith(month) || event.data?.startsWith(month)),
+  );
+  const monthLabel = firstDay.toLocaleDateString("pt-BR", {
+    month: "long",
+    year: "numeric",
+  });
+  const shiftMonth = (delta: number) => {
+    const next = new Date(year, monthIndex - 1 + delta, 1);
+    setMonth(next.toISOString().slice(0, 7));
+  };
+  const openDay = (date: string) => {
+    setSelectedDate(date);
+    drawer.onOpen();
+  };
+  const categoriesByType = (type: string) =>
+    data.categorias_financeiras
+      .filter((x) => (x.status ?? "ativa") === "ativa" && x.tipo === type)
+      .map((x) => x.nome ?? "")
+      .filter(Boolean);
+  const openAdd = (kind: "receita" | "despesa" | "recorrente") => {
+    setAddKind(kind);
+    addModal.onOpen();
+  };
+  const openEdit = (event: FinanceRecord) => {
+    const { table, id } = sourceFromEvent(event);
+    const item = data[table]?.find((record) => record.id === id);
+    if (!item) {
+      toast({
+        title: "Evento derivado",
+        description: "Este evento é uma previsão calculada. Edite o lançamento de origem correspondente.",
+        status: "info",
+      });
+      return;
+    }
+    setEditing({ ...item, id: event.id });
+    editModal.onOpen();
+  };
+  const markDone = async (event: FinanceRecord) => {
+    if (isDerivedCalendarEvent(event)) {
+      toast({
+        title: "Evento previsto",
+        description: "Este item é informativo. Para baixar valores, use o lançamento ou fatura real.",
+        status: "info",
+      });
+      return;
+    }
+    const { table, id } = sourceFromEvent(event);
+    const item = data[table]?.find((record) => record.id === id);
+    if (!item) return;
+    const status =
+      table === "receitas"
+        ? "recebida"
+        : table === "despesas"
+          ? "pago"
+          : table === "faturas_cartao" || table === "parcelas_cartao"
+            ? "paga"
+            : table === "aportes_metas" || table === "movimentacoes_investimentos"
+              ? "confirmada"
+              : item.status;
+    await save(table, {
+      ...item,
+      status,
+      ...(table === "faturas_cartao" ? { paga_em: new Date().toISOString() } : {}),
+    });
+    toast({ title: "Status atualizado no calendário", status: "success" });
+  };
+  const skipOnlyThisMonth = async (event: FinanceRecord) => {
+    const { table, id } = sourceFromEvent(event);
+    const exceptionKey =
+      event.origem === "profile_salary"
+        ? calendarExceptionKey("profile_salary", "profile_salary")
+        : calendarExceptionKey(table, id);
+    if (!isMonthlySkippableEvent(event)) {
+      toast({
+        title: "Este item não pode ser pulado",
+        description:
+          "Use essa opção apenas para previsões, recorrências, parcelas futuras e aportes planejados.",
+        status: "info",
+      });
+      return;
+    }
+    if (
+      skippedThisMonth.some(
+        (item) => item.origem === exceptionKey,
+      )
+    ) {
+      toast({
+        title: "Este item já foi pulado neste mês",
+        status: "info",
+      });
+      return;
+    }
+    await save("eventos_financeiros", {
+      id: crypto.randomUUID(),
+      titulo: `Ignorar no mês · ${event.titulo ?? "Evento"}`,
+      tipo: CALENDAR_SKIP_TYPE,
+      data: `${month}-01`,
+      competencia: `${month}-01`,
+      origem: exceptionKey,
+      status: "pendente",
+      valor: 0,
+      observacao: `Exceção mensal criada para não considerar "${event.titulo ?? "evento"}" em ${month}.`,
+    });
+    toast({
+      title: "Item ignorado neste mês",
+      description: "A recorrência original continua ativa para os próximos meses.",
+      status: "success",
+    });
+  };
+  const deleteEvent = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    const { table, id } = sourceFromEvent(pendingDelete);
+    try {
+      if (isDerivedCalendarEvent(pendingDelete))
+        throw new Error("Eventos previstos não podem ser excluídos diretamente.");
+      await remove(table, id);
+      toast({ title: "Evento excluído", status: "success" });
+      setPendingDelete(undefined);
+    } catch (error) {
+      toast({
+        title: "Erro ao excluir evento",
+        description: (error as Error).message,
+        status: "error",
+      });
+    } finally {
+      setDeleting(false);
+    }
+  };
+  const addFields: Field[] =
+    addKind === "recorrente"
+      ? recurringFields.map((field) =>
+          field.key === "categoria"
+            ? {
+                ...field,
+                type: "select" as const,
+                options: categoriesByType("despesa"),
+              }
+            : field,
+        )
+      : [
+          { key: "descricao", label: "Descrição", required: true },
+          { key: "valor", label: "Valor", type: "number", required: true },
+          {
+            key: "categoria",
+            label: "Categoria",
+            type: "select",
+            required: true,
+            options: categoriesByType(addKind === "receita" ? "receita" : "despesa"),
+          },
+          { key: "data", label: "Data", type: "date", required: true },
+          {
+            key: addKind === "receita" ? "forma_recebimento" : "forma_pagamento",
+            label: addKind === "receita" ? "Forma de recebimento" : "Forma de pagamento",
+            type: "select",
+            required: true,
+            options:
+              addKind === "receita"
+                ? ["Pix", "Dinheiro", "Boleto", "Transferência"]
+                : ["Pix", "Dinheiro", "Débito", "Crédito", "Boleto", "Transferência"],
+          },
+          {
+            key: "status",
+            label: "Status",
+            type: "select",
+            required: true,
+            options: addKind === "receita" ? ["pendente", "recebida"] : ["pendente", "pago"],
+          },
+        ];
+  const saveAdded = async (item: FinanceRecord) => {
+    if (addKind === "recorrente") {
+      item.ativa = true;
+      item.status = item.status ?? "ativa";
+      await save("contas_recorrentes", item);
+      return;
+    }
+    item.data = item.data || selectedDate || todayISO();
+    await save(addKind === "receita" ? "receitas" : "despesas", item);
+  };
+  const saveEdited = async (item: FinanceRecord) => {
+    const { table, id } = sourceFromEvent(editing ?? item);
+    const original = data[table]?.find((record) => record.id === id);
+    await save(table, { ...original, ...item, id });
+  };
+  const editingSource = editing ? sourceFromEvent(editing) : undefined;
+  const editFields = calendarEditFieldsByTable(editingSource?.table);
   return (
     <Stack spacing="4">
       <Flex
@@ -1282,54 +1798,305 @@ function FinancialCalendar({ data }: { data: Data }) {
         <Box>
           <Heading size="lg">Calendário financeiro</Heading>
           <Text color="muted">
-            Eventos derivados dos lançamentos reais; alterações na origem
-            aparecem automaticamente.
+            Grade mensal conectada aos lançamentos reais do banco. Alterou,
+            pagou, recebeu ou excluiu: o calendário acompanha.
           </Text>
         </Box>
-        <Input
-          type="month"
-          maxW="210px"
-          value={month}
-          onChange={(e) => setMonth(e.target.value)}
-        />
+        <HStack>
+          <IconButton
+            aria-label="Mês anterior"
+            icon={<ChevronLeft size={18} />}
+            variant="ghost"
+            onClick={() => shiftMonth(-1)}
+          />
+          <Button variant="outline" onClick={() => setMonth(today.slice(0, 7))}>
+            Hoje
+          </Button>
+          <IconButton
+            aria-label="Próximo mês"
+            icon={<ChevronRight size={18} />}
+            variant="ghost"
+            onClick={() => shiftMonth(1)}
+          />
+        </HStack>
       </Flex>
-      <Box {...panel} overflow="hidden">
-        <TableContainer>
-          <Table>
-            <Thead>
-              <Tr>
-                <Th>Data</Th>
-                <Th>Evento</Th>
-                <Th>Origem</Th>
-                <Th>Status</Th>
-                <Th isNumeric>Valor</Th>
-              </Tr>
-            </Thead>
-            <Tbody>
-              {events.map((item) => (
-                <Tr key={item.id}>
-                  <Td>{formatDateBR(item.data)}</Td>
-                  <Td>{item.titulo}</Td>
-                  <Td>
-                    <Badge>{item.tipo}</Badge>
-                  </Td>
-                  <Td>{item.status ?? "pendente"}</Td>
-                  <Td isNumeric>{formatCurrency(item.valor)}</Td>
-                </Tr>
+      <SimpleGrid columns={{ base: 1, md: 4 }} spacing="3">
+        {[
+          ["A receber", totalReceivable, "green"],
+          ["A pagar / investir", totalPayable, "red"],
+          ["Saldo previsto", totalReceivable - totalPayable, "blue"],
+          ["Pendências", pending, "orange"],
+        ].map(([label, value, color]) => (
+          <Box key={String(label)} {...panel} p="4">
+            <Text color="muted" fontSize="sm">
+              {label}
+            </Text>
+            <Heading size="sm" color={`${color}.300`} mt="1">
+              {typeof value === "number" && label !== "Pendências"
+                ? formatCurrency(value)
+                : value}
+            </Heading>
+          </Box>
+        ))}
+      </SimpleGrid>
+      <Box {...panel} p="4">
+        <Flex
+          justify="space-between"
+          align={{ base: "flex-start", lg: "center" }}
+          direction={{ base: "column", lg: "row" }}
+          gap="3"
+        >
+          <Box>
+            <Heading size="md" textTransform="capitalize">
+              {monthLabel}
+            </Heading>
+            <Text color="muted" fontSize="sm">
+              {events.length} evento(s) no filtro atual
+            </Text>
+          </Box>
+          <Flex gap="2" wrap="wrap">
+            {calendarFilters.map((item) => (
+              <Button
+                key={item}
+                size="sm"
+                variant={filter === item ? "solid" : "outline"}
+                onClick={() => setFilter(item)}
+              >
+                {item}
+              </Button>
+            ))}
+          </Flex>
+        </Flex>
+        <Flex gap="3" wrap="wrap" mt="4">
+          {[
+            ["Receita", "Receita"],
+            ["Despesa", "Despesa"],
+            ["Cartão/Fatura", "Fatura"],
+            ["Meta", "Meta"],
+            ["Investimento", "Investimento"],
+            ["Recorrente", "Recorrente"],
+          ].map(([label, type]) => {
+            const tone = typeTone(type);
+            return (
+              <Flex key={label} align="center" gap="2" fontSize="xs" color="muted">
+                <Box w="10px" h="10px" borderRadius="full" bg={tone.border} />
+                {label}
+              </Flex>
+            );
+          })}
+        </Flex>
+        {skippedThisMonth.length > 0 && (
+          <Box mt="4" p="3" border="1px dashed" borderColor="orange.400" borderRadius="xl">
+            <Text color="orange.200" fontSize="sm" fontWeight="800">
+              Itens pulados neste mês
+            </Text>
+            <Stack mt="2" spacing="2">
+              {skippedThisMonth.map((event) => (
+                <Flex
+                  key={event.id}
+                  justify="space-between"
+                  align={{ base: "flex-start", md: "center" }}
+                  gap="2"
+                  direction={{ base: "column", md: "row" }}
+                >
+                  <Text color="muted" fontSize="sm">
+                    {event.titulo}
+                  </Text>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => void remove("eventos_financeiros", event.id)}
+                  >
+                    Reativar no mês
+                  </Button>
+                </Flex>
               ))}
-              {!events.length && (
-                <Tr>
-                  <Td colSpan={5}>
-                    <Center py="12" color="muted">
-                      Nenhum evento financeiro neste mês.
-                    </Center>
-                  </Td>
-                </Tr>
-              )}
-            </Tbody>
-          </Table>
-        </TableContainer>
+            </Stack>
+          </Box>
+        )}
+        <SimpleGrid columns={7} spacing="2" mt="5" display={{ base: "none", md: "grid" }}>
+          {["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"].map((day) => (
+            <Text key={day} color="muted" fontSize="xs" fontWeight="800" textAlign="center">
+              {day}
+            </Text>
+          ))}
+          {cells.map((day, index) => {
+            const date = day ? `${month}-${String(day).padStart(2, "0")}` : "";
+            const dayEvents = date ? byDate[date] ?? [] : [];
+            return (
+              <Box
+                key={`${day ?? "blank"}-${index}`}
+                minH="132px"
+                p="2"
+                border="1px solid"
+                borderColor={date === today ? "brand.400" : dayEvents.length ? "brand.800" : "line"}
+                borderRadius="xl"
+                bg={date === today ? "rgba(15,98,254,.10)" : "panel2"}
+                cursor={day ? "pointer" : "default"}
+                transition=".2s ease"
+                _hover={day ? { transform: "translateY(-2px)", borderColor: "brand.400" } : undefined}
+                onClick={() => day && openDay(date)}
+              >
+                {day && (
+                  <>
+                    <Flex justify="space-between" align="center" mb="2">
+                      <Text fontWeight={date === today ? "900" : "700"}>{day}</Text>
+                      {dayEvents.length > 0 && (
+                        <Badge colorScheme="blue" borderRadius="full">
+                          {dayEvents.length}
+                        </Badge>
+                      )}
+                    </Flex>
+                    <Stack spacing="1">
+                      {dayEvents.slice(0, 3).map((event) => (
+                        <EventPill key={event.id} event={event} />
+                      ))}
+                      {dayEvents.length > 3 && (
+                        <Text fontSize="xs" color="muted">
+                          +{dayEvents.length - 3} evento(s)
+                        </Text>
+                      )}
+                    </Stack>
+                  </>
+                )}
+              </Box>
+            );
+          })}
+        </SimpleGrid>
+        <Stack mt="5" display={{ base: "flex", md: "none" }}>
+          {Array.from({ length: daysInMonth }, (_, index) => {
+            const day = index + 1;
+            const date = `${month}-${String(day).padStart(2, "0")}`;
+            const dayEvents = byDate[date] ?? [];
+            return (
+              <Box key={date} p="4" border="1px solid" borderColor={date === today ? "brand.400" : "line"} borderRadius="xl" onClick={() => openDay(date)}>
+                <Flex justify="space-between">
+                  <Text fontWeight="800">{formatDateBR(date)}</Text>
+                  <Badge>{dayEvents.length} evento(s)</Badge>
+                </Flex>
+                <Stack mt="3">
+                  {dayEvents.slice(0, 3).map((event) => (
+                    <EventPill key={event.id} event={event} />
+                  ))}
+                </Stack>
+              </Box>
+            );
+          })}
+        </Stack>
       </Box>
+      <Drawer isOpen={drawer.isOpen} placement="right" onClose={drawer.onClose} size="md">
+        <DrawerOverlay />
+        <DrawerContent>
+          <DrawerCloseButton />
+          <DrawerHeader>
+            {selectedDate ? formatDateBR(selectedDate) : "Dia selecionado"}
+            <Text color="muted" fontSize="sm" fontWeight="400">
+              Receber {formatCurrency(selectedReceivable)} · Pagar {formatCurrency(selectedPayable)} · Saldo {formatCurrency(selectedReceivable - selectedPayable)}
+            </Text>
+          </DrawerHeader>
+          <DrawerBody>
+            <Stack spacing="4">
+              <HStack wrap="wrap">
+                <Button size="sm" leftIcon={<Plus size={14} />} onClick={() => openAdd("receita")}>
+                  Receita
+                </Button>
+                <Button size="sm" leftIcon={<Plus size={14} />} onClick={() => openAdd("despesa")}>
+                  Despesa
+                </Button>
+                <Button size="sm" leftIcon={<Repeat2 size={14} />} onClick={() => openAdd("recorrente")}>
+                  Recorrente
+                </Button>
+              </HStack>
+              <Divider />
+              {selectedEvents.map((event) => {
+                const tone = typeTone(event.tipo);
+                return (
+                  <Box key={event.id} p="4" border="1px solid" borderColor="line" borderRadius="xl" bg={tone.bg}>
+                    <Flex justify="space-between" gap="3">
+                      <Box>
+                        <Badge colorScheme={tone.color}>{event.tipo}</Badge>
+                        <Heading size="sm" mt="2">
+                          {event.titulo}
+                        </Heading>
+                        <Text color="muted" fontSize="sm">
+                          {event.status ?? "pendente"} · {event.origem}
+                        </Text>
+                      </Box>
+                      <Text fontWeight="900">{formatCurrency(event.valor)}</Text>
+                    </Flex>
+                    <Flex gap="2" mt="4" wrap="wrap">
+                      {isMonthlySkippableEvent(event) && (
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          onClick={() => void skipOnlyThisMonth(event)}
+                        >
+                          Pular só este mês
+                        </Button>
+                      )}
+                      <Button size="xs" leftIcon={<CheckCircle2 size={13} />} onClick={() => void markDone(event)} isDisabled={isDerivedCalendarEvent(event)}>
+                        Marcar como pago/recebido
+                      </Button>
+                      <Button size="xs" variant="outline" leftIcon={<Edit2 size={13} />} onClick={() => openEdit(event)} isDisabled={isDerivedCalendarEvent(event)}>
+                        Editar
+                      </Button>
+                      <Button size="xs" colorScheme="red" variant="ghost" leftIcon={<Trash2 size={13} />} onClick={() => setPendingDelete(event)} isDisabled={isDerivedCalendarEvent(event)}>
+                        Excluir
+                      </Button>
+                    </Flex>
+                  </Box>
+                );
+              })}
+              {!selectedEvents.length && (
+                <Center py="14" color="muted" flexDir="column">
+                  <CalendarDays />
+                  <Text mt="3">Nenhuma movimentação neste dia.</Text>
+                </Center>
+              )}
+            </Stack>
+          </DrawerBody>
+          <DrawerFooter>
+            <Button variant="ghost" onClick={drawer.onClose}>
+              Fechar
+            </Button>
+          </DrawerFooter>
+        </DrawerContent>
+      </Drawer>
+      <Modal isOpen={addModal.isOpen} onClose={addModal.onClose} size="xl">
+        <ModalOverlay />
+        <ModalContent>
+          <Editor
+            title={addKind === "receita" ? "receita" : addKind === "despesa" ? "despesa" : "recorrência"}
+            fields={addFields}
+            item={selectedDate ? ({ data: selectedDate } as FinanceRecord) : undefined}
+            onSave={saveAdded}
+            onClose={addModal.onClose}
+          />
+        </ModalContent>
+      </Modal>
+      <Modal isOpen={editModal.isOpen} onClose={editModal.onClose} size="xl">
+        <ModalOverlay />
+        <ModalContent>
+          <Editor
+            title="lançamento"
+            fields={editFields}
+            item={editing}
+            onSave={saveEdited}
+            onClose={editModal.onClose}
+          />
+        </ModalContent>
+      </Modal>
+      <ConfirmModal
+        isOpen={Boolean(pendingDelete)}
+        onClose={() => setPendingDelete(undefined)}
+        onConfirm={() => void deleteEvent()}
+        title="Excluir evento financeiro"
+        description="Essa ação exclui o lançamento de origem no banco e atualiza o calendário automaticamente."
+        itemName={pendingDelete?.titulo}
+        impact="Eventos de fatura, parcelas, metas e recorrências podem alterar totais relacionados. Revise os módulos conectados após confirmar."
+        confirmLabel="Confirmar exclusão"
+        isLoading={deleting}
+      />
     </Stack>
   );
 }
@@ -1351,7 +2118,15 @@ export default function OperationalModule({
     return <Cards data={data} save={save} remove={remove} />;
   if (page === "recorrentes")
     return <Recurring data={data} save={save} remove={remove} />;
-  if (page === "calendario") return <FinancialCalendar data={data} />;
+  if (page === "calendario")
+    return (
+      <FinancialCalendar
+        data={data}
+        save={save}
+        remove={remove}
+        profile={profile}
+      />
+    );
   if (page === "relatorios") return <Reports data={data} profile={profile} />;
   const configs = {
     investimentos: {
