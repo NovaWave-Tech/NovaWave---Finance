@@ -158,7 +158,7 @@ export function calculateFinancialSnapshot(
   const forecastInstallments = data.parcelas_cartao.filter(
     (x) =>
       active(x) &&
-      x.status !== "paga" &&
+      !["paga", "cancelada", "estornada"].includes(x.status ?? "") &&
       inMonth(x, currentMonth, "competencia") &&
       !isSkippedThisMonth(skipped, "parcelas_cartao", x.id) &&
       (!x.compra_id || validPurchases.has(x.compra_id)) &&

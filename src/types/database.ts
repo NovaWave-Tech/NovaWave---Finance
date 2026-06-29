@@ -46,6 +46,7 @@ export interface FinanceRecord {
   cartao_id?: string;
   data_compra?: string;
   compra_id?: string;
+  fatura_id?: string | null;
   numero?: number;
   total?: number;
   competencia?: string;
@@ -69,6 +70,9 @@ export interface FinanceRecord {
   data_vencimento?: string;
   paga_em?: string;
   investimento_id?: string;
+  primeira_competencia?: string;
+  estabelecimento?: string;
+  tags?: string[];
   rendimento?: number;
   alerta_percentual?: number;
   limite_categoria?: number;

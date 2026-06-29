@@ -18,10 +18,27 @@ const statuses: Partial<Record<FinanceTable, string[]>> = {
   receitas: ["recebida", "pendente", "cancelada"],
   despesas: ["pago", "pendente", "atrasado", "cancelado"],
   compras_cartao: ["ativa", "cancelada", "estornada"],
+  parcelas_cartao: [
+    "pendente",
+    "faturada",
+    "paga",
+    "cancelada",
+    "estornada",
+  ],
   faturas_cartao: ["aberta", "fechada", "paga", "atrasada", "cancelada"],
   metas_financeiras: ["em_andamento", "concluida", "pausada", "cancelada"],
   contas_financeiras: ["ativa", "inativa", "arquivada"],
   transferencias_internas: ["pendente", "confirmada", "cancelada"],
+};
+const requiredRelations: Partial<
+  Record<FinanceTable, (keyof FinanceRecord)[]>
+> = {
+  compras_cartao: ["cartao_id"],
+  parcelas_cartao: ["compra_id", "cartao_id"],
+  faturas_cartao: ["cartao_id"],
+  aportes_metas: ["meta_id"],
+  movimentacoes_investimentos: ["investimento_id"],
+  orcamentos_categoria: ["categoria_id"],
 };
 export function validateFinanceRecord(
   table: FinanceTable,
@@ -32,6 +49,13 @@ export function validateFinanceRecord(
     throw new Error("Sua sessão expirou. Entre novamente para continuar.");
   if (!record.id)
     throw new Error("O registro não possui um identificador válido.");
+  const missingRelation = requiredRelations[table]?.find(
+    (field) => !record[field],
+  );
+  if (missingRelation)
+    throw new Error(
+      `Selecione ${String(missingRelation).replace(/_id$/, "").replaceAll("_", " ")} antes de salvar.`,
+    );
   if (
     positiveTables.has(table) &&
     (record.valor ?? record.valor_total ?? 0) <= 0

@@ -172,13 +172,15 @@ export function buildFinancialCalendar(
   data.parcelas_cartao
     .filter(
       (x) =>
-        x.status !== "paga" &&
+        !["paga", "cancelada", "estornada"].includes(x.status ?? "") &&
         x.competencia?.startsWith(month) &&
-        !isSkippedThisMonth(skipped, "parcelas_cartao", x.id) &&
-        !cardsWithInvoice.has(x.cartao_id),
+        !isSkippedThisMonth(skipped, "parcelas_cartao", x.id),
     )
     .forEach((x) => {
       const card = data.cartoes.find((card) => card.id === x.cartao_id);
+      const purchase = data.compras_cartao.find(
+        (item) => item.id === x.compra_id,
+      );
       const day = Math.min(
         card?.dia_vencimento ?? 1,
         new Date(
@@ -190,7 +192,7 @@ export function buildFinancialCalendar(
       events.push(
         event(
           x.id,
-          `Parcela ${x.numero}/${x.total} · ${card?.nome ?? "Cartão"}`,
+          `${purchase?.descricao ?? "Compra"} · ${x.numero}/${x.total}`,
           "Fatura",
           `${month}-${String(day).padStart(2, "0")}`,
           x.valor,

@@ -668,7 +668,16 @@ function TransfersPage({ data, save }: { data: Props["data"]; save: Props["save"
     event.preventDefault();
     try {
       const value = Number(form.valor);
+      if (!Number.isFinite(value) || value <= 0)
+        throw new Error("Informe um valor maior que zero.");
       if (!form.conta_origem_id) throw new Error("Selecione a conta de origem.");
+      const sourceAccount = calculateAccountBalances(data).find(
+        (account) => account.id === form.conta_origem_id,
+      );
+      if (!sourceAccount)
+        throw new Error("A conta de origem não está mais disponível.");
+      if (sourceAccount.saldo < value)
+        throw new Error("O saldo da conta de origem é insuficiente.");
       const goal =
         form.destino === "meta"
           ? data.metas_financeiras.find((x) => x.id === form.meta_id)
@@ -940,10 +949,18 @@ function MovementsPage({ data }: { data: Props["data"] }) {
     })),
     ...data.compras_cartao.map((item) => ({
       ...item,
-      table: "Compra no cartão",
+      table: "Compra no cartão (limite)",
       date: item.data_compra,
       amount: item.valor_total ?? 0,
       direction: "cartão",
+    })),
+    ...data.parcelas_cartao.map((item) => ({
+      ...item,
+      table: "Parcela do cartão",
+      date: item.data_vencimento ?? item.competencia,
+      amount: item.valor ?? 0,
+      direction: "cartão",
+      descricao: `${data.compras_cartao.find((purchase) => purchase.id === item.compra_id)?.descricao ?? "Compra parcelada"} · ${item.numero}/${item.total}`,
     })),
     ...data.faturas_cartao.map((item) => ({
       ...item,
@@ -1004,7 +1021,7 @@ function MovementsPage({ data }: { data: Props["data"] }) {
           <Input placeholder="Buscar nome, categoria ou observação" value={query} onChange={(e) => setQuery(e.target.value)} />
           <Select value={type} onChange={(e) => setType(e.target.value)} maxW={{ md: "220px" }}>
             <option value="">Todos os tipos</option>
-            {["Receita", "Despesa", "Compra no cartão", "Fatura", "Aporte", "Investimento"].map((item) => <option key={item}>{item}</option>)}
+            {["Receita", "Despesa", "Compra no cartão (limite)", "Parcela do cartão", "Fatura", "Aporte", "Investimento"].map((item) => <option key={item}>{item}</option>)}
           </Select>
           <Select value={status} onChange={(e) => setStatus(e.target.value)} maxW={{ md: "220px" }}>
             <option value="">Todos os status</option>

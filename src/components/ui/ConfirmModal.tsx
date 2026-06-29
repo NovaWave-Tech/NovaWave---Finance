@@ -25,6 +25,7 @@ export function ConfirmModal({
   cancelLabel = "Cancelar",
   colorScheme = "red",
   isLoading = false,
+  children,
 }: {
   isOpen: boolean;
   onClose: () => void;
@@ -37,6 +38,7 @@ export function ConfirmModal({
   cancelLabel?: string;
   colorScheme?: "red" | "orange" | "blue" | "green" | "purple";
   isLoading?: boolean;
+  children?: ReactNode;
 }) {
   return (
     <Modal isOpen={isOpen} onClose={onClose} isCentered motionPreset="scale">
@@ -51,6 +53,7 @@ export function ConfirmModal({
               {itemName}
             </Text>
           )}
+          {children}
           {impact && (
             <Alert status="warning" mt="5" borderRadius="xl" variant="subtle">
               <AlertIcon />

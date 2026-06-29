@@ -1,5 +1,6 @@
 import type { FinanceRecord } from "../types/database";
 import type { FinanceData } from "./financialEngine";
+import { calculateAvailableLimit } from "../utils/calculations";
 
 export type AuditNotification = {
   id: string;
@@ -23,6 +24,40 @@ export function buildAuditNotifications(data: FinanceData): AuditNotification[] 
     );
   };
   const notifications: AuditNotification[] = [
+    ...data.parcelas_cartao
+      .filter(
+        (item) =>
+          !["paga", "cancelada", "estornada"].includes(item.status ?? "") &&
+          inDays(item.data_vencimento ?? item.competencia) >= 0 &&
+          inDays(item.data_vencimento ?? item.competencia) <= 3,
+      )
+      .map((item) => ({
+        id: `installment-${item.id}`,
+        title: "Parcela próxima do vencimento",
+        description: `${data.compras_cartao.find((purchase) => purchase.id === item.compra_id)?.descricao ?? "Compra parcelada"} · ${item.numero}/${item.total}.`,
+        category: "Cartões",
+        severity: "media" as const,
+        date: item.data_vencimento ?? item.competencia ?? today,
+      })),
+    ...data.cartoes
+      .filter((card) => {
+        const limit = card.limite ?? 0;
+        if (!limit || (card.status ?? "ativa") !== "ativa") return false;
+        const available = calculateAvailableLimit(
+          card,
+          data.parcelas_cartao,
+          data.compras_cartao,
+        );
+        return ((limit - available) / limit) * 100 >= 80;
+      })
+      .map((card) => ({
+        id: `card-limit-${card.id}`,
+        title: "Limite do cartão acima de 80%",
+        description: card.nome ?? "Cartão",
+        category: "Cartões",
+        severity: "alta" as const,
+        date: today,
+      })),
     ...data.faturas_cartao
       .filter((item) => item.status !== "paga" && inDays(item.data_vencimento) <= 5)
       .map((item) => ({

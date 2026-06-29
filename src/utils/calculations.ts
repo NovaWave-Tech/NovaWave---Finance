@@ -35,6 +35,7 @@ export const calculateAvailableLimit = (
       (item) =>
         item.cartao_id === card.id &&
         item.status !== "paga" &&
+        !["cancelada", "estornada"].includes(item.status ?? "") &&
         (!item.compra_id || activePurchases.has(item.compra_id)),
     ),
   );

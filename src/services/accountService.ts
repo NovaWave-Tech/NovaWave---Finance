@@ -31,6 +31,7 @@ export function calculateAccountBalances(data: FinanceData): AccountBalance[] {
         (item) =>
           active(item) &&
           item.status === "pago" &&
+          item.tipo !== "pagamento_cartao" &&
           item.conta_id === account.id,
       );
       const faturas = data.faturas_cartao.filter(

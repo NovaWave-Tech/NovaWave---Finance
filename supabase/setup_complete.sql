@@ -106,6 +106,9 @@ create table if not exists public.transferencias_internas (
 
 -- Evoluções incrementais para instalações que já possuíam as tabelas.
 alter table public.receitas add column if not exists forma_recebimento text not null default 'Pix';
+-- CREATE TABLE IF NOT EXISTS não adiciona colunas ausentes em tabelas antigas.
+alter table public.perfil add column if not exists moeda text not null default 'BRL';
+alter table public.perfil add column if not exists timezone text not null default 'America/Sao_Paulo';
 alter table public.perfil add column if not exists telefone text;
 alter table public.perfil add column if not exists avatar_url text;
 alter table public.perfil add column if not exists tema text not null default 'dark';
@@ -185,6 +188,19 @@ alter table public.eventos_financeiros add column if not exists origem text;
 alter table public.eventos_financeiros add column if not exists competencia date;
 alter table public.cartoes add column if not exists ativo boolean not null default true;
 alter table public.compras_cartao add column if not exists status text not null default 'ativa';
+alter table public.compras_cartao add column if not exists primeira_competencia date;
+alter table public.compras_cartao add column if not exists estabelecimento text;
+alter table public.compras_cartao add column if not exists tags text[] not null default '{}';
+alter table public.parcelas_cartao add column if not exists fatura_id uuid references public.faturas_cartao(id) on delete set null;
+alter table public.parcelas_cartao add column if not exists data_vencimento date;
+update public.parcelas_cartao p
+set fatura_id = f.id,
+    data_vencimento = coalesce(p.data_vencimento, f.data_vencimento)
+from public.faturas_cartao f
+where p.fatura_id is null
+  and p.user_id = f.user_id
+  and p.cartao_id = f.cartao_id
+  and date_trunc('month', p.competencia) = date_trunc('month', f.competencia);
 alter table public.receitas add column if not exists conta_id uuid references public.contas_financeiras(id) on delete set null;
 alter table public.despesas add column if not exists conta_id uuid references public.contas_financeiras(id) on delete set null;
 alter table public.faturas_cartao add column if not exists conta_id uuid references public.contas_financeiras(id) on delete set null;
@@ -204,10 +220,13 @@ alter table public.despesas drop constraint if exists despesas_tipo_check;
 alter table public.despesas add constraint despesas_tipo_check check(tipo in ('fixa','variavel','recorrente','avulsa','pagamento_cartao'));
 alter table public.compras_cartao drop constraint if exists compras_cartao_status_check;
 alter table public.compras_cartao add constraint compras_cartao_status_check check(status in ('ativa','cancelada','estornada'));
+alter table public.parcelas_cartao drop constraint if exists parcelas_cartao_status_check;
+alter table public.parcelas_cartao add constraint parcelas_cartao_status_check check(status in ('pendente','faturada','paga','cancelada','estornada'));
 
 create unique index if not exists receitas_salario_competencia_uidx on public.receitas(user_id,origem,competencia) where origem='salario_perfil';
 create unique index if not exists receitas_recorrencia_competencia_uidx on public.receitas(user_id,origem,competencia) where origem like 'recorrencia:%';
 create unique index if not exists despesas_recorrencia_competencia_uidx on public.despesas(user_id,origem,competencia) where origem like 'recorrencia:%';
+create unique index if not exists despesas_pagamento_fatura_uidx on public.despesas(user_id,origem) where origem like 'fatura:%';
 create unique index if not exists aportes_recorrencia_competencia_uidx on public.aportes_metas(user_id,origem,competencia) where origem like 'recorrencia:%';
 create unique index if not exists investimentos_recorrencia_competencia_uidx on public.movimentacoes_investimentos(user_id,origem,competencia) where origem like 'recorrencia:%';
 create unique index if not exists contas_recorrentes_origem_uidx on public.contas_recorrentes(user_id,origem) where origem is not null;
@@ -215,6 +234,8 @@ create unique index if not exists eventos_excecao_calendario_uidx on public.even
 create index if not exists receitas_conta_id_idx on public.receitas(conta_id);
 create index if not exists despesas_conta_id_idx on public.despesas(conta_id);
 create index if not exists faturas_cartao_conta_id_idx on public.faturas_cartao(conta_id);
+create index if not exists parcelas_cartao_fatura_id_idx on public.parcelas_cartao(fatura_id);
+create index if not exists parcelas_cartao_competencia_idx on public.parcelas_cartao(user_id,competencia);
 create index if not exists aportes_metas_conta_id_idx on public.aportes_metas(conta_id);
 create index if not exists movimentacoes_investimentos_conta_id_idx on public.movimentacoes_investimentos(conta_id);
 create index if not exists transferencias_internas_origem_idx on public.transferencias_internas(conta_origem_id);

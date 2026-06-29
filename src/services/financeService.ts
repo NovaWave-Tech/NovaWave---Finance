@@ -2,6 +2,47 @@ import { isSupabaseConfigured, supabase } from "../lib/supabase";
 import type { FinanceRecord, FinanceTable, Profile } from "../types/database";
 import { validateFinanceRecord } from "../utils/validators";
 
+const uuidFields = new Set<keyof FinanceRecord>([
+  "id",
+  "user_id",
+  "cartao_id",
+  "compra_id",
+  "fatura_id",
+  "meta_id",
+  "categoria_id",
+  "conta_id",
+  "conta_origem_id",
+  "conta_destino_id",
+  "destino_id",
+  "investimento_id",
+]);
+
+function normalizeRecord(record: FinanceRecord): FinanceRecord {
+  const normalized = { ...record } as Record<string, unknown>;
+  uuidFields.forEach((field) => {
+    if (typeof normalized[field] === "string" && !normalized[field].trim()) {
+      normalized[field] = null;
+    }
+  });
+  return normalized as unknown as FinanceRecord;
+}
+
+function friendlyDatabaseError(error: { code?: string; message?: string }) {
+  if (error.code === "22P02")
+    return new Error(
+      "Um dos vínculos selecionados é inválido. Escolha novamente a conta, categoria ou item relacionado.",
+    );
+  if (error.code === "23503")
+    return new Error(
+      "O item relacionado não existe mais. Atualize a página e selecione outro registro.",
+    );
+  if (error.code === "23505")
+    return new Error("Este registro já existe e não pode ser duplicado.");
+  if (error.code === "42501")
+    return new Error("Você não tem permissão para alterar este registro.");
+  return error;
+}
+
 export const financeService = {
   async list(table: FinanceTable): Promise<FinanceRecord[]> {
     if (!isSupabaseConfigured) return [];
@@ -14,24 +55,29 @@ export const financeService = {
   },
   async save(table: FinanceTable, record: FinanceRecord, userId: string) {
     if (!isSupabaseConfigured) return record;
-    validateFinanceRecord(table, record, userId);
+    const normalized = normalizeRecord(record);
+    validateFinanceRecord(table, normalized, userId);
     const { data, error } = await supabase
       .from(table)
-      .upsert({ ...record, user_id: userId })
+      .upsert({ ...normalized, user_id: userId })
       .select()
       .single();
-    if (error?.code === "23505" && record.origem && record.competencia) {
+    if (
+      error?.code === "23505" &&
+      normalized.origem &&
+      normalized.competencia
+    ) {
       const { data: existing, error: lookupError } = await supabase
         .from(table)
         .select("*")
         .eq("user_id", userId)
-        .eq("origem", record.origem)
-        .eq("competencia", record.competencia)
+        .eq("origem", normalized.origem)
+        .eq("competencia", normalized.competencia)
         .maybeSingle();
-      if (lookupError) throw lookupError;
+      if (lookupError) throw friendlyDatabaseError(lookupError);
       if (existing) return existing as FinanceRecord;
     }
-    if (error) throw error;
+    if (error) throw friendlyDatabaseError(error);
     return data as FinanceRecord;
   },
   async remove(table: FinanceTable, id: string) {

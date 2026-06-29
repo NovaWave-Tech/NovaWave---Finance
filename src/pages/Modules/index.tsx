@@ -79,6 +79,7 @@ import { calculateAvailableLimit } from "../../utils/calculations";
 import { buildFinancialCalendar } from "../../services/calendarService";
 import { ConfirmModal } from "../../components/ui/ConfirmModal";
 import { DateInputBR } from "../../components/forms/DateInputBR";
+import { PurchaseFlow } from "./PurchaseFlow";
 
 type Data = Record<FinanceTable, FinanceRecord[]>;
 type ModulePage =
@@ -613,6 +614,7 @@ function InvoicesPanel({
     | undefined
   >();
   const [paying, setPaying] = useState(false);
+  const [paymentAccountId, setPaymentAccountId] = useState("");
   const groups = Object.values(
     data.parcelas_cartao
       .filter(
@@ -653,14 +655,18 @@ function InvoicesPanel({
     const competence = group.competencia.slice(0, 7);
     const due = `${competence}-${String(card?.dia_vencimento ?? 1).padStart(2, "0")}`;
     try {
+      if (data.contas_financeiras.length && !paymentAccountId)
+        throw new Error("Selecione a conta usada para pagar a fatura.");
+      const invoiceId =
+        data.faturas_cartao.find(
+          (x) =>
+            x.cartao_id === group.cartao_id &&
+            x.competencia?.startsWith(competence),
+        )?.id ?? crypto.randomUUID();
       await save("faturas_cartao", {
-        id:
-          data.faturas_cartao.find(
-            (x) =>
-              x.cartao_id === group.cartao_id &&
-              x.competencia?.startsWith(competence),
-          )?.id ?? crypto.randomUUID(),
+        id: invoiceId,
         cartao_id: group.cartao_id,
+        conta_id: paymentAccountId || null,
         competencia: `${competence}-01`,
         data_fechamento: `${competence}-01`,
         data_vencimento: due,
@@ -671,7 +677,9 @@ function InvoicesPanel({
       for (const installment of group.parcelas)
         await save("parcelas_cartao", { ...installment, status: "paga" });
       await save("despesas", {
-        id: crypto.randomUUID(),
+        id:
+          data.despesas.find((item) => item.origem === `fatura:${invoiceId}`)
+            ?.id ?? crypto.randomUUID(),
         descricao: `Pagamento da fatura ${card?.nome ?? ""}`,
         valor: group.valor,
         categoria: "Cartão de crédito",
@@ -679,6 +687,8 @@ function InvoicesPanel({
         forma_pagamento: "Transferência",
         status: "pago",
         tipo: "pagamento_cartao",
+        conta_id: paymentAccountId || null,
+        origem: `fatura:${invoiceId}`,
       });
       toast({ title: "Fatura paga e saldo atualizado", status: "success" });
       setSelectedInvoice(undefined);
@@ -723,7 +733,24 @@ function InvoicesPanel({
                 <Td>{group.competencia.slice(0, 7)}</Td>
                 <Td isNumeric>{formatCurrency(group.valor)}</Td>
                 <Td textAlign="right">
-                  <Button size="sm" onClick={() => setSelectedInvoice(group)}>
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setPaymentAccountId(
+                        data.faturas_cartao.find(
+                          (item) =>
+                            item.cartao_id === group.cartao_id &&
+                            item.competencia?.startsWith(
+                              group.competencia.slice(0, 7),
+                            ),
+                        )?.conta_id ??
+                          (data.contas_financeiras.length === 1
+                            ? data.contas_financeiras[0].id
+                            : ""),
+                      );
+                      setSelectedInvoice(group);
+                    }}
+                  >
                     Pagar fatura
                   </Button>
                 </Td>
@@ -756,17 +783,38 @@ function InvoicesPanel({
         confirmLabel="Confirmar pagamento"
         colorScheme="green"
         isLoading={paying}
-      />
+      >
+        {data.contas_financeiras.length > 0 && (
+          <FormControl mt="4" isRequired>
+            <FormLabel>Conta de pagamento</FormLabel>
+            <Select
+              value={paymentAccountId}
+              onChange={(event) => setPaymentAccountId(event.target.value)}
+            >
+              <option value="">Selecione</option>
+              {data.contas_financeiras
+                .filter((account) => (account.status ?? "ativa") === "ativa")
+                .map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.nome}
+                  </option>
+                ))}
+            </Select>
+          </FormControl>
+        )}
+      </ConfirmModal>
     </Box>
   );
 }
 
 function Cards({
   data,
+  profile,
   save,
   remove,
 }: {
   data: Data;
+  profile?: Profile | null;
   save: (table: FinanceTable, item: FinanceRecord) => Promise<void>;
   remove: (table: FinanceTable, id: string) => Promise<void>;
 }) {
@@ -782,189 +830,30 @@ function Cards({
     0,
   );
   const currentInvoice = data.parcelas_cartao
-    .filter((x) => x.competencia?.startsWith(current) && x.status !== "paga")
-    .reduce((s, x) => s + (x.valor ?? 0), 0);
-  const purchaseFields: Field[] = [
-    { key: "descricao", label: "Descrição", required: true },
-    {
-      key: "valor_total",
-      label: "Valor total",
-      type: "number",
-      required: true,
-    },
-    {
-      key: "quantidade_parcelas",
-      label: "Parcelas",
-      type: "number",
-      required: true,
-    },
-    {
-      key: "cartao_id",
-      label: "Cartão",
-      type: "select",
-      required: true,
-      options: activeCards.map((x) => `${x.id}|${x.nome}`),
-    },
-    {
-      key: "data_compra",
-      label: "Data da compra",
-      type: "date",
-      required: true,
-    },
-    {
-      key: "status",
-      label: "Status",
-      type: "select",
-      required: true,
-      options: ["ativa", "cancelada", "estornada"],
-    },
-    {
-      key: "categoria",
-      label: "Categoria",
-      type: "select",
-      required: true,
-      options: data.categorias_financeiras
-        .filter(
-          (x) =>
-            (x.status ?? "ativa") === "ativa" &&
-            ["despesa", "cartao"].includes(x.tipo ?? ""),
-        )
-        .map((x) => x.nome ?? "")
-        .filter(Boolean),
-    },
-    { key: "observacao", label: "Observação", type: "textarea" },
-  ];
-  const savePurchase = async (item: FinanceRecord) => {
-    if (
-      data.parcelas_cartao.some(
-        (x) => x.compra_id === item.id && x.status === "paga",
-      )
-    )
-      throw new Error("Uma compra com parcela já paga não pode ser alterada.");
-    const cardOption = item.cartao_id ?? "";
-    item.cartao_id = cardOption.includes("|")
-      ? cardOption.split("|")[0]
-      : cardOption;
-    const count = Math.max(1, item.quantidade_parcelas ?? 1);
-    const card = data.cartoes.find((x) => x.id === item.cartao_id);
-    if (!card || (card.status ?? "ativa") !== "ativa")
-      throw new Error("Selecione um cartão ativo.");
-    if ((item.valor_total ?? 0) <= 0)
-      throw new Error("O valor da compra deve ser maior que zero.");
-    if (!Number.isInteger(count) || count <= 0)
-      throw new Error("A quantidade de parcelas deve ser maior que zero.");
-    const previous =
-      data.compras_cartao.find((x) => x.id === item.id)?.valor_total ?? 0;
-    if (
-      (item.valor_total ?? 0) - previous >
-      calculateAvailableLimit(card, data.parcelas_cartao, data.compras_cartao)
-    )
-      throw new Error("Limite insuficiente para esta compra.");
-    item.status = item.status ?? "ativa";
-    item.categoria_id = data.categorias_financeiras.find(
+    .filter(
       (x) =>
-        x.nome === item.categoria &&
-        ["despesa", "cartao"].includes(x.tipo ?? ""),
-    )?.id;
-    item.valor_parcela =
-      Math.round(((item.valor_total ?? 0) / count) * 100) / 100;
-    await save("compras_cartao", item);
-    for (const existing of data.parcelas_cartao.filter(
-      (x) => x.compra_id === item.id,
-    ))
-      await remove("parcelas_cartao", existing.id);
-    const purchaseDate = new Date(`${item.data_compra}T12:00:00`);
-    if (Number.isNaN(purchaseDate.getTime()))
-      throw new Error("Informe uma data de compra válida.");
-    const startsNext = purchaseDate.getDate() > (card?.dia_fechamento ?? 31);
-    const generated: FinanceRecord[] = [];
-    for (
-      let index = 0;
-      index < (item.status === "ativa" ? count : 0);
-      index++
-    ) {
-      const date = new Date(
-        purchaseDate.getFullYear(),
-        purchaseDate.getMonth() + index + (startsNext ? 1 : 0),
-        1,
-      );
-      const base = item.valor_parcela ?? 0;
-      const value =
-        index === count - 1
-          ? Math.round(((item.valor_total ?? 0) - base * (count - 1)) * 100) /
-            100
-          : base;
-      const installment: FinanceRecord = {
-        id: crypto.randomUUID(),
-        compra_id: item.id,
-        cartao_id: item.cartao_id,
-        numero: index + 1,
-        total: count,
-        valor: value,
-        competencia: date.toISOString().slice(0, 10),
-        status: "pendente",
-      };
-      generated.push(installment);
-      await save("parcelas_cartao", installment);
-    }
-    const affected = new Set([
-      ...data.parcelas_cartao
-        .filter((x) => x.compra_id === item.id)
-        .map((x) => x.competencia?.slice(0, 7) ?? ""),
-      ...generated.map((x) => x.competencia?.slice(0, 7) ?? ""),
-    ]);
-    for (const competence of affected) {
-      if (!competence) continue;
-      const installments = [
-        ...data.parcelas_cartao.filter(
-          (x) =>
-            x.compra_id !== item.id &&
-            x.cartao_id === card.id &&
-            x.competencia?.startsWith(competence) &&
-            x.status !== "paga" &&
-            !["cancelada", "estornada"].includes(
-              data.compras_cartao.find((p) => p.id === x.compra_id)?.status ??
-                "ativa",
-            ),
-        ),
-        ...generated.filter((x) => x.competencia?.startsWith(competence)),
-      ];
-      const total = installments.reduce((sum, x) => sum + (x.valor ?? 0), 0);
-      const invoice = data.faturas_cartao.find(
-        (x) => x.cartao_id === card.id && x.competencia?.startsWith(competence),
-      );
-      if (!total) {
-        if (invoice && invoice.status !== "paga")
-          await remove("faturas_cartao", invoice.id);
-        continue;
-      }
-      const year = Number(competence.slice(0, 4)),
-        month = Number(competence.slice(5, 7));
-      const lastDay = new Date(year, month, 0).getDate();
-      await save("faturas_cartao", {
-        id: invoice?.id ?? crypto.randomUUID(),
-        cartao_id: card.id,
-        competencia: `${competence}-01`,
-        data_fechamento: `${competence}-${String(Math.min(card.dia_fechamento ?? 1, lastDay)).padStart(2, "0")}`,
-        data_vencimento: `${competence}-${String(Math.min(card.dia_vencimento ?? 1, lastDay)).padStart(2, "0")}`,
-        valor: total,
-        status: invoice?.status === "fechada" ? "fechada" : "aberta",
-      });
-    }
-  };
-  const removePurchase = async (id: string) => {
-    for (const installment of data.parcelas_cartao.filter(
-      (x) => x.compra_id === id,
-    ))
-      await remove("parcelas_cartao", installment.id);
-    await remove("compras_cartao", id);
-  };
+        x.competencia?.startsWith(current) &&
+        !["paga", "cancelada", "estornada"].includes(x.status ?? ""),
+    )
+    .reduce((s, x) => s + (x.valor ?? 0), 0);
+  const usedLimit = Math.max(0, totalLimit - availableLimit);
+  const nextInvoice = data.faturas_cartao
+    .filter(
+      (invoice) =>
+        !["paga", "cancelada"].includes(invoice.status ?? "") &&
+        (invoice.competencia ?? "") > `${current}-01`,
+    )
+    .sort((a, b) =>
+      (a.competencia ?? "").localeCompare(b.competencia ?? ""),
+    )[0];
   return (
     <Stack spacing="18px">
-      <SimpleGrid columns={{ base: 1, md: 3 }} spacing="14px">
+      <SimpleGrid columns={{ base: 1, sm: 2, xl: 5 }} spacing="14px">
         {[
           ["Limite total", totalLimit],
+          ["Limite utilizado", usedLimit],
           ["Fatura atual", currentInvoice],
+          ["Próxima fatura", nextInvoice?.valor ?? 0],
           ["Limite disponível", availableLimit],
         ].map(([label, value]) => (
           <Box key={String(label)} {...panel} p="20px">
@@ -976,6 +865,22 @@ function Cards({
           </Box>
         ))}
       </SimpleGrid>
+      <Box {...panel} p="4">
+        <Flex justify="space-between" mb="2">
+          <Text fontWeight="800">Utilização consolidada do limite</Text>
+          <Text color="muted">
+            {totalLimit ? ((usedLimit / totalLimit) * 100).toFixed(1) : "0.0"}%
+          </Text>
+        </Flex>
+        <Box h="10px" borderRadius="full" bg="whiteAlpha.100" overflow="hidden">
+          <Box
+            h="full"
+            w={`${Math.min(100, totalLimit ? (usedLimit / totalLimit) * 100 : 0)}%`}
+            bg={usedLimit / Math.max(1, totalLimit) >= 0.8 ? "red.400" : "brand.400"}
+            transition="width .25s ease"
+          />
+        </Box>
+      </Box>
       <EntitySection
         title="Meus cartões"
         singular="cartão"
@@ -999,71 +904,8 @@ function Cards({
         onSave={(x) => save("cartoes", x)}
         onRemove={(id) => remove("cartoes", id)}
       />
-      <EntitySection
-        title="Compras e parcelas"
-        singular="compra"
-        icon={<CreditCard />}
-        items={data.compras_cartao}
-        fields={purchaseFields}
-        columns={[
-          { key: "descricao", label: "Compra" },
-          {
-            key: "valor_total",
-            label: "Total",
-            format: (x) => formatCurrency(x.valor_total),
-          },
-          {
-            key: "quantidade_parcelas",
-            label: "Parcelas",
-            format: (x) => `${x.quantidade_parcelas ?? 1}x`,
-          },
-          {
-            key: "data_compra",
-            label: "Data",
-            format: (x) => formatDateBR(x.data_compra),
-          },
-        ]}
-        onSave={savePurchase}
-        onRemove={removePurchase}
-      />
+      <PurchaseFlow data={data} profile={profile} save={save} remove={remove} />
       <InvoicesPanel data={data} save={save} />
-      <EntitySection
-        title="Próximas faturas"
-        singular="parcela"
-        icon={<CalendarDays />}
-        items={data.parcelas_cartao.filter(
-          (x) => (x.competencia ?? "") >= `${current}-01`,
-        )}
-        fields={[]}
-        columns={[
-          {
-            key: "competencia",
-            label: "Fatura",
-            format: (x) => formatDateBR(x.competencia),
-          },
-          {
-            key: "numero",
-            label: "Parcela",
-            format: (x) => `${x.numero}/${x.total}`,
-          },
-          {
-            key: "valor",
-            label: "Valor",
-            format: (x) => formatCurrency(x.valor),
-          },
-          {
-            key: "status",
-            label: "Status",
-            format: (x) => (
-              <Badge colorScheme={x.status === "paga" ? "green" : "orange"}>
-                {x.status}
-              </Badge>
-            ),
-          },
-        ]}
-        onSave={(x) => save("parcelas_cartao", x)}
-        onRemove={(id) => remove("parcelas_cartao", id)}
-      />
     </Stack>
   );
 }
@@ -1266,6 +1108,34 @@ function Recurring({
 function Reports({ data, profile }: { data: Data; profile?: Profile | null }) {
   const snapshot = calculateFinancialSnapshot(data, new Date(), profile);
   const biggest = [...snapshot.categories].sort((a, b) => b.value - a.value)[0];
+  const activePurchases = data.compras_cartao.filter(
+    (item) => item.status === "ativa",
+  );
+  const openInstallments = data.parcelas_cartao.filter(
+    (item) =>
+      !["paga", "cancelada", "estornada"].includes(item.status ?? ""),
+  );
+  const paidInstallments = data.parcelas_cartao.filter(
+    (item) => item.status === "paga",
+  );
+  const biggestPurchase = [...data.compras_cartao].sort(
+    (a, b) => (b.valor_total ?? 0) - (a.valor_total ?? 0),
+  )[0];
+  const cardTotals = data.cartoes
+    .map((card) => ({
+      card,
+      value: openInstallments
+        .filter((item) => item.cartao_id === card.id)
+        .reduce((total, item) => total + (item.valor ?? 0), 0),
+    }))
+    .sort((a, b) => b.value - a.value);
+  const purchaseCategoryTotals = Object.entries(
+    activePurchases.reduce<Record<string, number>>((totals, purchase) => {
+      const category = purchase.categoria ?? "Sem categoria";
+      totals[category] = (totals[category] ?? 0) + (purchase.valor_total ?? 0);
+      return totals;
+    }, {}),
+  ).sort((a, b) => b[1] - a[1]);
   return (
     <Stack spacing="18px">
       <SimpleGrid columns={{ base: 1, md: 3, xl: 6 }} spacing="14px">
@@ -1287,6 +1157,44 @@ function Reports({ data, profile }: { data: Data; profile?: Profile | null }) {
           </Box>
         ))}
       </SimpleGrid>
+      <Box {...panel} p="22px">
+        <Heading size="sm">Indicadores de compras parceladas</Heading>
+        <SimpleGrid columns={{ base: 2, md: 3, xl: 6 }} spacing="4" mt="4">
+          {[
+            ["Compras ativas", String(activePurchases.length)],
+            ["Valor financiado", formatCurrency(activePurchases.reduce((total, item) => total + (item.valor_total ?? 0), 0))],
+            ["Parcelas abertas", String(openInstallments.length)],
+            ["Parcelas pagas", String(paidInstallments.length)],
+            ["Maior compra", biggestPurchase?.descricao ?? "—"],
+            ["Cartão mais utilizado", cardTotals[0]?.card.nome ?? "—"],
+          ].map(([label, value]) => (
+            <Box key={label}>
+              <Text color="muted" fontSize="xs">{label}</Text>
+              <Text fontWeight="800" mt="1">{value}</Text>
+            </Box>
+          ))}
+        </SimpleGrid>
+        <SimpleGrid columns={{ base: 1, md: 2 }} spacing="6" mt="6">
+          <Box>
+            <Text fontWeight="800" mb="2">Distribuição por categoria</Text>
+            <Stack spacing="2">
+              {purchaseCategoryTotals.slice(0, 5).map(([category, value]) => (
+                <Flex key={category} justify="space-between"><Text color="muted">{category}</Text><Text fontWeight="700">{formatCurrency(value)}</Text></Flex>
+              ))}
+              {!purchaseCategoryTotals.length && <Text color="muted">Sem compras ativas.</Text>}
+            </Stack>
+          </Box>
+          <Box>
+            <Text fontWeight="800" mb="2">Distribuição por cartão</Text>
+            <Stack spacing="2">
+              {cardTotals.filter((item) => item.value > 0).slice(0, 5).map((item) => (
+                <Flex key={item.card.id} justify="space-between"><Text color="muted">{item.card.nome}</Text><Text fontWeight="700">{formatCurrency(item.value)}</Text></Flex>
+              ))}
+              {!cardTotals.some((item) => item.value > 0) && <Text color="muted">Sem parcelas abertas.</Text>}
+            </Stack>
+          </Box>
+        </SimpleGrid>
+      </Box>
       <Box {...panel} p="22px">
         <Flex justify="space-between">
           <Box>
@@ -2115,7 +2023,7 @@ export default function OperationalModule({
   profile?: Profile | null;
 }) {
   if (page === "cartoes")
-    return <Cards data={data} save={save} remove={remove} />;
+    return <Cards data={data} profile={profile} save={save} remove={remove} />;
   if (page === "recorrentes")
     return <Recurring data={data} save={save} remove={remove} />;
   if (page === "calendario")
