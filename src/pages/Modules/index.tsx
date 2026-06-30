@@ -80,6 +80,7 @@ import { buildFinancialCalendar } from "../../services/calendarService";
 import { ConfirmModal } from "../../components/ui/ConfirmModal";
 import { DateInputBR } from "../../components/forms/DateInputBR";
 import { PurchaseFlow } from "./PurchaseFlow";
+import { calculateAccountBalances } from "../../services/accountService";
 
 type Data = Record<FinanceTable, FinanceRecord[]>;
 type ModulePage =
@@ -190,7 +191,11 @@ function Editor({
                 />
               ) : field.type === "select" ? (
                 <Select
-                  value={form[field.key]}
+                  value={
+                    field.options?.find((option) =>
+                      option.startsWith(`${form[field.key]}|`),
+                    ) ?? form[field.key]
+                  }
                   onChange={(e) =>
                     setForm({ ...form, [field.key]: e.target.value })
                   }
@@ -655,8 +660,23 @@ function InvoicesPanel({
     const competence = group.competencia.slice(0, 7);
     const due = `${competence}-${String(card?.dia_vencimento ?? 1).padStart(2, "0")}`;
     try {
-      if (data.contas_financeiras.length && !paymentAccountId)
+      if (
+        data.contas_financeiras.some((account) => account.status === "ativa") &&
+        !paymentAccountId
+      )
         throw new Error("Selecione a conta usada para pagar a fatura.");
+      const paymentAccount = calculateAccountBalances(data).find(
+        (account) => account.id === paymentAccountId,
+      );
+      if (
+        paymentAccount &&
+        paymentAccount.status === "ativa" &&
+        !paymentAccount.permite_saldo_negativo &&
+        paymentAccount.saldo < group.valor
+      )
+        throw new Error("A conta selecionada não possui saldo suficiente.");
+      if (paymentAccountId && paymentAccount?.status !== "ativa")
+        throw new Error("Selecione uma conta de pagamento ativa.");
       const invoiceId =
         data.faturas_cartao.find(
           (x) =>
@@ -744,8 +764,15 @@ function InvoicesPanel({
                               group.competencia.slice(0, 7),
                             ),
                         )?.conta_id ??
-                          (data.contas_financeiras.length === 1
-                            ? data.contas_financeiras[0].id
+                          data.cartoes.find(
+                            (card) => card.id === group.cartao_id,
+                          )?.conta_id ??
+                          (data.contas_financeiras.filter(
+                            (account) => account.status === "ativa",
+                          ).length === 1
+                            ? data.contas_financeiras.find(
+                                (account) => account.status === "ativa",
+                              )?.id ?? ""
                             : ""),
                       );
                       setSelectedInvoice(group);
@@ -886,7 +913,18 @@ function Cards({
         singular="cartão"
         icon={<CreditCard />}
         items={data.cartoes}
-        fields={cardFields}
+        fields={[
+          ...cardFields,
+          {
+            key: "conta_id",
+            label: "Conta de pagamento",
+            type: "select",
+            required: true,
+            options: data.contas_financeiras
+              .filter((account) => account.status === "ativa")
+              .map((account) => `${account.id}|${account.nome}`),
+          },
+        ]}
         columns={[
           { key: "nome", label: "Cartão" },
           { key: "banco", label: "Banco" },
@@ -901,7 +939,11 @@ function Cards({
             format: (x) => `Dia ${x.dia_vencimento}`,
           },
         ]}
-        onSave={(x) => save("cartoes", x)}
+        onSave={(x) => {
+          if (x.conta_id?.includes("|")) x.conta_id = x.conta_id.split("|")[0];
+          if (!x.conta_id) throw new Error("Selecione a conta de pagamento do cartão.");
+          return save("cartoes", x);
+        }}
         onRemove={(id) => remove("cartoes", id)}
       />
       <PurchaseFlow data={data} profile={profile} save={save} remove={remove} />
@@ -945,6 +987,7 @@ function Recurring({
           origem: `recorrencia:${account.id}`,
           competencia: `${key}-01`,
           observacao: `Gerada automaticamente da recorrência ${account.descricao}`,
+          conta_id: account.conta_id,
         };
         if (account.tipo === "receita")
           await save("receitas", {
@@ -962,6 +1005,7 @@ function Recurring({
           await save("aportes_metas", {
             id: crypto.randomUUID(),
             meta_id: account.meta_id,
+            conta_id: account.conta_id,
             valor: account.valor,
             data: date,
             status: "pendente",
@@ -976,6 +1020,7 @@ function Recurring({
           await save("movimentacoes_investimentos", {
             id: crypto.randomUUID(),
             investimento_id: account.investimento_id,
+            conta_id: account.conta_id,
             tipo: "aplicacao",
             valor: account.valor,
             data: date,
@@ -1055,6 +1100,15 @@ function Recurring({
             type: "select",
             options: data.investimentos.map((x) => `${x.id}|${x.nome}`),
           },
+          {
+            key: "conta_id",
+            label: "Conta de origem/destino",
+            type: "select",
+            required: true,
+            options: data.contas_financeiras
+              .filter((x) => x.status === "ativa")
+              .map((x) => `${x.id}|${x.nome}`),
+          },
         ]}
         columns={[
           { key: "descricao", label: "Conta" },
@@ -1079,6 +1133,7 @@ function Recurring({
           if (x.meta_id?.includes("|")) x.meta_id = x.meta_id.split("|")[0];
           if (x.investimento_id?.includes("|"))
             x.investimento_id = x.investimento_id.split("|")[0];
+          if (x.conta_id?.includes("|")) x.conta_id = x.conta_id.split("|")[0];
           x.ativa = x.ativa ?? true;
           x.status = x.status ?? "ativa";
           const categoryType =
@@ -1097,6 +1152,8 @@ function Recurring({
             throw new Error(
               `Selecione uma categoria ativa do tipo ${categoryType}.`,
             );
+          if (!x.conta_id)
+            throw new Error("Selecione uma conta ativa para a recorrência.");
           return save("contas_recorrentes", x);
         }}
         onRemove={(id) => remove("contas_recorrentes", id)}
@@ -1558,20 +1615,114 @@ function FinancialCalendar({
     const { table, id } = sourceFromEvent(event);
     const item = data[table]?.find((record) => record.id === id);
     if (!item) return;
+    if (table === "faturas_cartao") {
+      toast({
+        title: "Pague a fatura pelo módulo de Cartões",
+        description:
+          "Assim o sistema baixa as parcelas e registra corretamente a conta de pagamento.",
+        status: "info",
+      });
+      return;
+    }
+    if (table === "aportes_metas" && item.status === "pendente") {
+      const account = calculateAccountBalances(data).find(
+        (candidate) => candidate.id === item.conta_id,
+      );
+      const goal = data.metas_financeiras.find(
+        (candidate) => candidate.id === item.meta_id,
+      );
+      if (!account || account.status !== "ativa") {
+        toast({ title: "O aporte planejado precisa de uma conta ativa", status: "error" });
+        return;
+      }
+      if (
+        !account.permite_saldo_negativo &&
+        account.saldo < (item.valor ?? 0)
+      )
+        {
+          toast({ title: "A conta do aporte não possui saldo suficiente", status: "error" });
+          return;
+        }
+      if (!goal) {
+        toast({ title: "A meta vinculada não foi encontrada", status: "error" });
+        return;
+      }
+      const next = (goal.valor_atual ?? 0) + (item.valor ?? 0);
+      await save("aportes_metas", { ...item, status: "confirmado" });
+      await save("metas_financeiras", {
+        ...goal,
+        valor_atual: next,
+        status: next >= (goal.valor_alvo ?? Infinity) ? "concluida" : goal.status,
+      });
+      toast({ title: "Aporte realizado e saldo atualizado", status: "success" });
+      return;
+    }
+    if (
+      ["receitas", "despesas"].includes(table) &&
+      ["pendente", "aberta", "fechada", "atrasada"].includes(
+        item.status ?? "",
+      )
+    ) {
+      const account = calculateAccountBalances(data).find(
+        (candidate) => candidate.id === item.conta_id,
+      );
+      if (!account || account.status !== "ativa") {
+        toast({ title: "Selecione uma conta ativa no lançamento antes de confirmar", status: "error" });
+        return;
+      }
+      const isOutflow = table !== "receitas";
+      if (
+        isOutflow &&
+        !account.permite_saldo_negativo &&
+        account.saldo < (item.valor ?? 0)
+      ) {
+        toast({ title: "A conta selecionada não possui saldo suficiente", status: "error" });
+        return;
+      }
+    }
+    if (table === "movimentacoes_investimentos" && item.status === "pendente") {
+      const account = calculateAccountBalances(data).find(
+        (candidate) => candidate.id === item.conta_id,
+      );
+      const investment = data.investimentos.find(
+        (candidate) => candidate.id === item.investimento_id,
+      );
+      if (!account || account.status !== "ativa" || !investment) {
+        toast({ title: "Revise a conta e o investimento vinculados", status: "error" });
+        return;
+      }
+      if (
+        item.tipo === "aplicacao" &&
+        !account.permite_saldo_negativo &&
+        account.saldo < (item.valor ?? 0)
+      ) {
+        toast({ title: "A conta selecionada não possui saldo suficiente", status: "error" });
+        return;
+      }
+      const delta = item.tipo === "resgate" ? -(item.valor ?? 0) : item.valor ?? 0;
+      await save("movimentacoes_investimentos", { ...item, status: "confirmada" });
+      await save("investimentos", {
+        ...investment,
+        valor_investido: Math.max(0, (investment.valor_investido ?? 0) + delta),
+      });
+      toast({ title: "Movimentação de investimento confirmada", status: "success" });
+      return;
+    }
     const status =
       table === "receitas"
         ? "recebida"
         : table === "despesas"
           ? "pago"
-          : table === "faturas_cartao" || table === "parcelas_cartao"
+          : table === "parcelas_cartao"
             ? "paga"
-            : table === "aportes_metas" || table === "movimentacoes_investimentos"
-              ? "confirmada"
+            : table === "aportes_metas"
+              ? "confirmado"
+              : table === "movimentacoes_investimentos"
+                ? "confirmada"
               : item.status;
     await save(table, {
       ...item,
       status,
-      ...(table === "faturas_cartao" ? { paga_em: new Date().toISOString() } : {}),
     });
     toast({ title: "Status atualizado no calendário", status: "success" });
   };
@@ -1638,7 +1789,7 @@ function FinancialCalendar({
       setDeleting(false);
     }
   };
-  const addFields: Field[] =
+  const baseAddFields: Field[] =
     addKind === "recorrente"
       ? recurringFields.map((field) =>
           field.key === "categoria"
@@ -1678,7 +1829,22 @@ function FinancialCalendar({
             options: addKind === "receita" ? ["pendente", "recebida"] : ["pendente", "pago"],
           },
         ];
+  const addFields: Field[] = [
+    ...baseAddFields,
+    {
+      key: "conta_id" as keyof FinanceRecord,
+      label:
+        addKind === "receita" ? "Conta de destino" : "Conta de origem",
+      type: "select",
+      required: true,
+      options: data.contas_financeiras
+        .filter((account) => account.status === "ativa")
+        .map((account) => `${account.id}|${account.nome}`),
+    },
+  ];
   const saveAdded = async (item: FinanceRecord) => {
+    if (item.conta_id?.includes("|")) item.conta_id = item.conta_id.split("|")[0];
+    if (!item.conta_id) throw new Error("Selecione uma conta ativa.");
     if (addKind === "recorrente") {
       item.ativa = true;
       item.status = item.status ?? "ativa";
@@ -2171,8 +2337,23 @@ export default function OperationalModule({
     const previous = data.investimentos.find((x) => x.id === item.id);
     const before = previous?.valor_investido ?? 0,
       after = item.valor_investido ?? 0;
-    await save("investimentos", item);
+    if (item.conta_id?.includes("|")) item.conta_id = item.conta_id.split("|")[0];
+    const accountId = item.conta_id;
+    delete item.conta_id;
     const difference = after - before;
+    const account = calculateAccountBalances(data).find(
+      (candidate) => candidate.id === accountId && candidate.status === "ativa",
+    );
+    if (difference !== 0 && !account)
+      throw new Error("Selecione uma conta ativa para esta movimentação.");
+    if (
+      difference > 0 &&
+      account &&
+      !account.permite_saldo_negativo &&
+      account.saldo < difference
+    )
+      throw new Error("A conta selecionada não possui saldo suficiente.");
+    await save("investimentos", item);
     if (difference !== 0)
       await save("movimentacoes_investimentos", {
         id: crypto.randomUUID(),
@@ -2181,25 +2362,52 @@ export default function OperationalModule({
         valor: Math.abs(difference),
         data: todayISO(),
         status: "confirmada",
+        conta_id: accountId,
         observacao: previous ? "Ajuste de posição" : "Aplicação inicial",
       });
   };
   const main = (
     <EntitySection
       {...configs}
+      fields={
+        configs.table === "investimentos"
+          ? [
+              ...configs.fields,
+              {
+                key: "conta_id",
+                label: "Conta da movimentação",
+                type: "select",
+                options: data.contas_financeiras
+                  .filter((account) => account.status === "ativa")
+                  .map((account) => `${account.id}|${account.nome}`),
+              } as Field,
+            ]
+          : configs.fields
+      }
       onSave={saveEntity}
       onRemove={(id) => remove(configs.table, id)}
     />
   );
   if (page !== "investimentos") return main;
-  const movementFields = investmentMovementFields.map((field) =>
-    field.key === "investimento_id"
-      ? {
-          ...field,
-          options: data.investimentos.map((x) => `${x.id}|${x.nome}`),
-        }
-      : field,
-  );
+  const movementFields = [
+    ...investmentMovementFields.map((field) =>
+      field.key === "investimento_id"
+        ? {
+            ...field,
+            options: data.investimentos.map((x) => `${x.id}|${x.nome}`),
+          }
+        : field,
+    ),
+    {
+      key: "conta_id" as keyof FinanceRecord,
+      label: "Conta de origem/destino",
+      type: "select" as const,
+      required: true,
+      options: data.contas_financeiras
+        .filter((account) => account.status === "ativa")
+        .map((account) => `${account.id}|${account.nome}`),
+    },
+  ];
   const movementDelta = (item: Partial<FinanceRecord>) =>
     item.status === "confirmada"
       ? item.tipo === "resgate"
@@ -2209,6 +2417,11 @@ export default function OperationalModule({
   const saveMovement = async (item: FinanceRecord) => {
     if (item.investimento_id?.includes("|"))
       item.investimento_id = item.investimento_id.split("|")[0];
+    if (item.conta_id?.includes("|")) item.conta_id = item.conta_id.split("|")[0];
+    const account = calculateAccountBalances(data).find(
+      (candidate) => candidate.id === item.conta_id && candidate.status === "ativa",
+    );
+    if (!account) throw new Error("Selecione uma conta ativa.");
     const investment = data.investimentos.find(
       (x) => x.id === item.investimento_id,
     );
@@ -2216,6 +2429,19 @@ export default function OperationalModule({
     const previous = data.movimentacoes_investimentos.find(
       (x) => x.id === item.id,
     );
+    const previousDebit =
+      previous?.status === "confirmada" && previous.tipo === "aplicacao"
+        ? previous.valor ?? 0
+        : 0;
+    if (
+      item.status === "confirmada" &&
+      item.tipo === "aplicacao" &&
+      !account.permite_saldo_negativo &&
+      account.saldo +
+        (previous?.conta_id === account.id ? previousDebit : 0) <
+        (item.valor ?? 0)
+    )
+      throw new Error("A conta selecionada não possui saldo suficiente.");
     const next = Math.max(
       0,
       (investment.valor_investido ?? 0) -

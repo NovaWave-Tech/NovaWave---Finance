@@ -88,9 +88,10 @@ export const financeService = {
   async ensureMonthlySalary(
     profile: Profile,
     userId: string,
+    accountId?: string | null,
   ): Promise<FinanceRecord | null> {
     const amount = profile.salario_previsto ?? 0;
-    if (!profile.salario_recorrente || amount <= 0) return null;
+    if (!profile.salario_recorrente || amount <= 0 || !accountId) return null;
     const parts = new Intl.DateTimeFormat("en-CA", {
       timeZone: "America/Sao_Paulo",
       year: "numeric",
@@ -116,7 +117,8 @@ export const financeService = {
       .eq("competencia", competence)
       .maybeSingle();
     if (findError) throw findError;
-    if (existing?.status === "recebida") return existing as FinanceRecord;
+    if (existing?.status === "recebida" && existing.conta_id)
+      return existing as FinanceRecord;
     const payload = {
       user_id: userId,
       descricao: "Salário mensal",
@@ -132,6 +134,7 @@ export const financeService = {
       dia_recebimento: payDay,
       origem: "salario_perfil",
       competencia: competence,
+      conta_id: accountId || null,
     };
     if (existing) {
       const { data, error } = await supabase

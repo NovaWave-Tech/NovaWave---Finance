@@ -34,6 +34,8 @@ import { formatDateBR, todayISO } from "../../utils/date";
 import { CurrencyInput } from "../../components/forms/CurrencyInput";
 import { DateInputBR } from "../../components/forms/DateInputBR";
 import { ConfirmModal } from "../../components/ui/ConfirmModal";
+import { calculateAccountBalances } from "../../services/accountService";
+import type { FinanceData } from "../../services/financialEngine";
 
 const panel = {
   bg: "panel",
@@ -46,12 +48,14 @@ export default function GoalsPage({
   goals,
   contributions,
   categories,
+  data,
   save,
   remove,
 }: {
   goals: FinanceRecord[];
   contributions: FinanceRecord[];
   categories: FinanceRecord[];
+  data: FinanceData;
   save: (table: FinanceTable, item: FinanceRecord) => Promise<void>;
   remove: (table: FinanceTable, id: string) => Promise<void>;
 }) {
@@ -70,11 +74,33 @@ export default function GoalsPage({
   });
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
+  const [contributionDate, setContributionDate] = useState(todayISO());
+  const [contributionAccount, setContributionAccount] = useState("");
+  const [contributionStatus, setContributionStatus] = useState("confirmado");
+  const [editingContribution, setEditingContribution] =
+    useState<FinanceRecord>();
   const [pendingContributionDelete, setPendingContributionDelete] =
     useState<FinanceRecord>();
   const [pendingGoalDelete, setPendingGoalDelete] = useState<FinanceRecord>();
   const [deleting, setDeleting] = useState(false);
   const toast = useToast();
+  const accountBalances = calculateAccountBalances(data);
+  const activeAccounts = accountBalances.filter(
+    (account) => account.status === "ativa",
+  );
+  const openContribution = (
+    goal: FinanceRecord,
+    contribution?: FinanceRecord,
+  ) => {
+    setSelected(goal);
+    setEditingContribution(contribution);
+    setAmount(String(contribution?.valor ?? ""));
+    setNote(contribution?.observacao ?? "");
+    setContributionDate(contribution?.data ?? todayISO());
+    setContributionAccount(contribution?.conta_id ?? "");
+    setContributionStatus(contribution?.status ?? "confirmado");
+    aporte.onOpen();
+  };
   const open = (goal?: FinanceRecord) => {
     setSelected(goal);
     setForm({
@@ -131,26 +157,59 @@ export default function GoalsPage({
       if ((selected.status ?? "em_andamento") !== "em_andamento")
         throw new Error("Apenas metas em andamento podem receber aportes.");
       if (value <= 0) throw new Error("O aporte deve ser maior que zero.");
+      const account = accountBalances.find(
+        (item) => item.id === contributionAccount,
+      );
+      if (!account || account.status !== "ativa")
+        throw new Error("Selecione uma conta de origem ativa.");
+      const wasRealized =
+        editingContribution && editingContribution.status !== "pendente";
+      const willBeRealized = contributionStatus !== "pendente";
+      const availableForChange =
+        account.saldo +
+        (wasRealized && editingContribution?.conta_id === account.id
+          ? editingContribution.valor ?? 0
+          : 0);
+      if (
+        willBeRealized &&
+        !account.permite_saldo_negativo &&
+        availableForChange < value
+      )
+        throw new Error("A conta selecionada não possui saldo suficiente.");
       await save("aportes_metas", {
-        id: crypto.randomUUID(),
+        id: editingContribution?.id ?? crypto.randomUUID(),
         meta_id: selected.id,
         valor: value,
-        data: todayISO(),
+        data: contributionDate,
+        conta_id: account.id,
         observacao: note,
-        status: "confirmado",
+        status: contributionStatus,
       });
+      const previousImpact = wasRealized
+        ? editingContribution?.valor ?? 0
+        : 0;
+      const nextImpact = willBeRealized ? value : 0;
+      const nextGoalValue = Math.max(
+        0,
+        (selected.valor_atual ?? 0) - previousImpact + nextImpact,
+      );
       await save("metas_financeiras", {
         ...selected,
-        valor_atual: (selected.valor_atual ?? 0) + value,
+        valor_atual: nextGoalValue,
         status:
-          (selected.valor_atual ?? 0) + value >=
-          (selected.valor_alvo ?? Infinity)
+          nextGoalValue >= (selected.valor_alvo ?? Infinity)
             ? "concluida"
-            : selected.status,
+            : selected.status === "concluida"
+              ? "em_andamento"
+              : selected.status,
       });
-      toast({ title: "Aporte adicionado", status: "success" });
+      toast({
+        title: editingContribution ? "Aporte atualizado" : "Aporte adicionado",
+        status: "success",
+      });
       setAmount("");
       setNote("");
+      setEditingContribution(undefined);
       aporte.onClose();
     } catch (error) {
       toast({
@@ -212,6 +271,23 @@ export default function GoalsPage({
   const confirmContribution = async (contribution: FinanceRecord) => {
     const goal = goals.find((x) => x.id === contribution.meta_id);
     if (!goal || contribution.status !== "pendente") return;
+    const account = accountBalances.find(
+      (item) => item.id === contribution.conta_id,
+    );
+    if (!account || account.status !== "ativa") {
+      toast({
+        title: "Selecione uma conta ativa antes de confirmar",
+        status: "error",
+      });
+      return;
+    }
+    if (
+      !account.permite_saldo_negativo &&
+      account.saldo < (contribution.valor ?? 0)
+    ) {
+      toast({ title: "Saldo insuficiente na conta de origem", status: "error" });
+      return;
+    }
     const next = (goal.valor_atual ?? 0) + (contribution.valor ?? 0);
     await save("aportes_metas", { ...contribution, status: "confirmado" });
     await save("metas_financeiras", {
@@ -329,8 +405,7 @@ export default function GoalsPage({
                 mt="5"
                 leftIcon={<Plus size={16} />}
                 onClick={() => {
-                  setSelected(goal);
-                  aporte.onOpen();
+                  openContribution(goal);
                 }}
                 isDisabled={(goal.status ?? "em_andamento") !== "em_andamento"}
               >
@@ -366,10 +441,23 @@ export default function GoalsPage({
                             </Button>
                           )}
                           <IconButton
+                            aria-label="Editar aporte"
+                            icon={<Edit2 size={12} />}
+                            size="xs"
+                            variant="ghost"
+                            isDisabled={String(item.origem ?? "").startsWith(
+                              "transferencia:",
+                            )}
+                            onClick={() => openContribution(goal, item)}
+                          />
+                          <IconButton
                             aria-label="Remover aporte"
                             icon={<Trash2 size={12} />}
                             size="xs"
                             variant="ghost"
+                            isDisabled={String(item.origem ?? "").startsWith(
+                              "transferencia:",
+                            )}
                             onClick={() => setPendingContributionDelete(item)}
                           />
                         </Flex>
@@ -481,7 +569,7 @@ export default function GoalsPage({
       <Modal isOpen={aporte.isOpen} onClose={aporte.onClose}>
         <ModalOverlay />
         <ModalContent as="form" onSubmit={addContribution}>
-          <ModalHeader>Novo aporte</ModalHeader>
+          <ModalHeader>{editingContribution ? "Editar" : "Novo"} aporte</ModalHeader>
           <ModalCloseButton />
           <ModalBody>
             <FormControl isRequired>
@@ -490,6 +578,37 @@ export default function GoalsPage({
                 value={Number(amount)}
                 onValueChange={(value) => setAmount(String(value))}
               />
+            </FormControl>
+            <FormControl mt="4" isRequired>
+              <FormLabel>Conta de origem</FormLabel>
+              <Select
+                value={contributionAccount}
+                onChange={(e) => setContributionAccount(e.target.value)}
+              >
+                <option value="">Selecione</option>
+                {activeAccounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.nome} · {formatCurrency(account.saldo)}
+                  </option>
+                ))}
+              </Select>
+            </FormControl>
+            <FormControl mt="4" isRequired>
+              <FormLabel>Data</FormLabel>
+              <DateInputBR
+                value={contributionDate}
+                onChange={(e) => setContributionDate(e.target.value)}
+              />
+            </FormControl>
+            <FormControl mt="4" isRequired>
+              <FormLabel>Status</FormLabel>
+              <Select
+                value={contributionStatus}
+                onChange={(e) => setContributionStatus(e.target.value)}
+              >
+                <option value="pendente">Planejado</option>
+                <option value="confirmado">Realizado</option>
+              </Select>
             </FormControl>
             <FormControl mt="4">
               <FormLabel>Observação</FormLabel>
@@ -500,7 +619,9 @@ export default function GoalsPage({
             </FormControl>
           </ModalBody>
           <ModalFooter>
-            <Button type="submit">Adicionar</Button>
+            <Button type="submit">
+              {editingContribution ? "Salvar alterações" : "Adicionar"}
+            </Button>
           </ModalFooter>
         </ModalContent>
       </Modal>

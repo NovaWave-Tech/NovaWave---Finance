@@ -19,7 +19,6 @@ export type AccountBalance = FinanceRecord & {
 
 export function calculateAccountBalances(data: FinanceData): AccountBalance[] {
   return data.contas_financeiras
-    .filter(active)
     .map((account) => {
       const receitas = data.receitas.filter(
         (item) =>

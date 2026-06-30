@@ -206,10 +206,14 @@ alter table public.despesas add column if not exists conta_id uuid references pu
 alter table public.faturas_cartao add column if not exists conta_id uuid references public.contas_financeiras(id) on delete set null;
 alter table public.aportes_metas add column if not exists conta_id uuid references public.contas_financeiras(id) on delete set null;
 alter table public.movimentacoes_investimentos add column if not exists conta_id uuid references public.contas_financeiras(id) on delete set null;
+alter table public.contas_recorrentes add column if not exists conta_id uuid references public.contas_financeiras(id) on delete set null;
 alter table public.contas_financeiras add column if not exists banco text;
 alter table public.contas_financeiras add column if not exists cor text not null default '#0F62FE';
 alter table public.contas_financeiras add column if not exists saldo_inicial numeric(14,2) not null default 0;
 alter table public.contas_financeiras add column if not exists status text not null default 'ativa';
+alter table public.contas_financeiras add column if not exists icone text;
+alter table public.contas_financeiras add column if not exists permite_saldo_negativo boolean not null default false;
+alter table public.cartoes add column if not exists conta_id uuid references public.contas_financeiras(id) on delete set null;
 alter table public.transferencias_internas add column if not exists status text not null default 'confirmada';
 
 alter table public.receitas drop constraint if exists receitas_status_check;
@@ -222,6 +226,9 @@ alter table public.compras_cartao drop constraint if exists compras_cartao_statu
 alter table public.compras_cartao add constraint compras_cartao_status_check check(status in ('ativa','cancelada','estornada'));
 alter table public.parcelas_cartao drop constraint if exists parcelas_cartao_status_check;
 alter table public.parcelas_cartao add constraint parcelas_cartao_status_check check(status in ('pendente','faturada','paga','cancelada','estornada'));
+alter table public.aportes_metas drop constraint if exists aportes_metas_status_check;
+update public.aportes_metas set status = 'confirmado' where status in ('confirmada','realizado','realizada');
+alter table public.aportes_metas add constraint aportes_metas_status_check check(status in ('pendente','confirmado','cancelado'));
 
 create unique index if not exists receitas_salario_competencia_uidx on public.receitas(user_id,origem,competencia) where origem='salario_perfil';
 create unique index if not exists receitas_recorrencia_competencia_uidx on public.receitas(user_id,origem,competencia) where origem like 'recorrencia:%';
@@ -238,8 +245,10 @@ create index if not exists parcelas_cartao_fatura_id_idx on public.parcelas_cart
 create index if not exists parcelas_cartao_competencia_idx on public.parcelas_cartao(user_id,competencia);
 create index if not exists aportes_metas_conta_id_idx on public.aportes_metas(conta_id);
 create index if not exists movimentacoes_investimentos_conta_id_idx on public.movimentacoes_investimentos(conta_id);
+create index if not exists contas_recorrentes_conta_id_idx on public.contas_recorrentes(conta_id);
 create index if not exists transferencias_internas_origem_idx on public.transferencias_internas(conta_origem_id);
 create index if not exists transferencias_internas_destino_idx on public.transferencias_internas(conta_destino_id);
+create index if not exists cartoes_conta_id_idx on public.cartoes(conta_id);
 
 alter table public.categorias_financeiras drop constraint if exists categorias_financeiras_tipo_check;
 alter table public.categorias_financeiras add constraint categorias_financeiras_tipo_check check(tipo in ('receita','despesa','cartao','meta','investimento','transferencia'));
@@ -256,11 +265,32 @@ alter table public.movimentacoes_investimentos add constraint movimentacoes_inve
 alter table public.contas_financeiras drop constraint if exists contas_financeiras_tipo_check;
 alter table public.contas_financeiras add constraint contas_financeiras_tipo_check check(tipo in ('Conta Corrente','Conta Poupança','Conta Investimento','Carteira','Caixa'));
 alter table public.contas_financeiras drop constraint if exists contas_financeiras_status_check;
-alter table public.contas_financeiras add constraint contas_financeiras_status_check check(status in ('ativa','inativa','arquivada'));
+update public.contas_financeiras set status = 'arquivada' where status = 'inativa';
+alter table public.contas_financeiras add constraint contas_financeiras_status_check check(status in ('ativa','arquivada'));
 alter table public.transferencias_internas drop constraint if exists transferencias_internas_destino_tipo_check;
 alter table public.transferencias_internas add constraint transferencias_internas_destino_tipo_check check(destino_tipo in ('conta','meta','investimento','reserva'));
 alter table public.transferencias_internas drop constraint if exists transferencias_internas_status_check;
 alter table public.transferencias_internas add constraint transferencias_internas_status_check check(status in ('pendente','confirmada','cancelada'));
+
+create or replace function public.prevent_linked_account_delete() returns trigger
+language plpgsql security invoker set search_path=public as $$
+begin
+  if exists(select 1 from public.receitas where conta_id = old.id)
+    or exists(select 1 from public.despesas where conta_id = old.id)
+    or exists(select 1 from public.faturas_cartao where conta_id = old.id)
+    or exists(select 1 from public.aportes_metas where conta_id = old.id)
+    or exists(select 1 from public.movimentacoes_investimentos where conta_id = old.id)
+    or exists(select 1 from public.contas_recorrentes where conta_id = old.id)
+    or exists(select 1 from public.transferencias_internas where conta_origem_id = old.id or conta_destino_id = old.id)
+    or exists(select 1 from public.cartoes where conta_id = old.id)
+  then
+    raise exception using errcode = '23503', message = 'Esta conta possui movimentações vinculadas e deve ser arquivada.';
+  end if;
+  return old;
+end; $$;
+drop trigger if exists prevent_linked_account_delete on public.contas_financeiras;
+create trigger prevent_linked_account_delete before delete on public.contas_financeiras
+for each row execute function public.prevent_linked_account_delete();
 
 do $$ declare t text; begin
   foreach t in array array['perfil','receitas','despesas','cartoes','compras_cartao','parcelas_cartao','faturas_cartao','metas_financeiras','aportes_metas','investimentos','movimentacoes_investimentos','eventos_financeiros','contas_recorrentes','categorias_financeiras','orcamentos_categoria','contas_financeiras','transferencias_internas'] loop

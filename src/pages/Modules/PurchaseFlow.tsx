@@ -336,7 +336,7 @@ export function PurchaseFlow({ data, profile, save, remove }: Props) {
           status: ["fechada", "atrasada"].includes(invoice?.status ?? "")
             ? invoice?.status
             : "aberta",
-          conta_id: invoice?.conta_id ?? null,
+          conta_id: invoice?.conta_id ?? card.conta_id ?? null,
         };
         await save("faturas_cartao", savedInvoice);
         invoiceByMonth.set(competence, savedInvoice);

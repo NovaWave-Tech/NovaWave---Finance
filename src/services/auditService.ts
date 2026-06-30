@@ -156,6 +156,21 @@ export function buildAuditChecks(data: FinanceData) {
       detail: "Despesas pagas devem indicar de qual conta saíram.",
     },
     {
+      label: "Aportes sem conta",
+      ok: data.aportes_metas.every((item) => Boolean(item.conta_id)),
+      detail: "Todo aporte planejado ou realizado deve preservar sua conta de origem.",
+    },
+    {
+      label: "Investimentos sem conta",
+      ok: data.movimentacoes_investimentos.every((item) => Boolean(item.conta_id)),
+      detail: "Aplicações e resgates precisam indicar a conta movimentada.",
+    },
+    {
+      label: "Cartões sem conta de pagamento",
+      ok: data.cartoes.every((item) => Boolean(item.conta_id)),
+      detail: "A conta vinculada é usada automaticamente ao pagar a fatura.",
+    },
+    {
       label: "Transferências consistentes",
       ok: data.transferencias_internas.every((item) => item.conta_origem_id && item.valor && item.valor > 0),
       detail: "Toda transferência precisa de origem e valor.",
