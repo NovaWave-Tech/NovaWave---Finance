@@ -70,6 +70,7 @@ import { DateInputBR } from "../../components/forms/DateInputBR";
 import { calculateStrategicAnalysis } from "../../services/strategicAnalysis";
 import { calculateAccountBalances } from "../../services/accountService";
 import { buildAuditChecks, buildAuditNotifications } from "../../services/auditService";
+import { AccountManagement } from "./AccountManagement";
 
 type StrategicPage =
   | "saude"
@@ -97,6 +98,7 @@ type Props = {
   data: Record<FinanceTable, FinanceRecord[]>;
   profile?: Profile | null;
   save: (table: FinanceTable, item: FinanceRecord) => Promise<void>;
+  remove: (table: FinanceTable, id: string) => Promise<void>;
 };
 
 const panel = {
@@ -560,6 +562,7 @@ function SubscriptionsPage({
     valor: "",
     dia_vencimento: "1",
     categoria: "",
+    conta_id: "",
     status: "ativa",
   });
   const submit = async (event: FormEvent) => {
@@ -574,6 +577,7 @@ function SubscriptionsPage({
       status: form.status,
       ativa: form.status === "ativa",
       forma_pagamento: "Cartão",
+      conta_id: form.conta_id,
     });
     toast({ title: "Assinatura cadastrada", status: "success" });
     modal.onClose();
@@ -642,6 +646,15 @@ function SubscriptionsPage({
                   ))}
                 </Select>
               </FormControl>
+              <FormControl isRequired>
+                <FormLabel>Conta de pagamento</FormLabel>
+                <Select value={form.conta_id} onChange={(e) => setForm({ ...form, conta_id: e.target.value })}>
+                  <option value="">Selecione</option>
+                  {data.contas_financeiras.filter((account) => account.status === "ativa").map((account) => (
+                    <option key={account.id} value={account.id}>{account.nome}</option>
+                  ))}
+                </Select>
+              </FormControl>
             </SimpleGrid>
           </ModalBody>
           <ModalFooter><Button type="submit">Salvar</Button></ModalFooter>
@@ -676,7 +689,7 @@ function TransfersPage({ data, save }: { data: Props["data"]; save: Props["save"
       );
       if (!sourceAccount)
         throw new Error("A conta de origem não está mais disponível.");
-      if (sourceAccount.saldo < value)
+      if (!sourceAccount.permite_saldo_negativo && sourceAccount.saldo < value)
         throw new Error("O saldo da conta de origem é insuficiente.");
       const goal =
         form.destino === "meta"
@@ -753,7 +766,9 @@ function TransfersPage({ data, save }: { data: Props["data"]; save: Props["save"
       });
     }
   };
-  const accounts = calculateAccountBalances(data);
+  const accounts = calculateAccountBalances(data).filter(
+    (account) => account.status === "ativa",
+  );
   const accountName = (id?: string | null) =>
     data.contas_financeiras.find((account) => account.id === id)?.nome ?? "—";
   const destinationName = (item: FinanceRecord) => {
@@ -1162,6 +1177,7 @@ function TimelinePage({ data }: { data: Props["data"] }) {
 function QuickImportPage({ data, save }: { data: Props["data"]; save: Props["save"] }) {
   const [text, setText] = useState("");
   const [parsed, setParsed] = useState<FinanceRecord[]>([]);
+  const [accountId, setAccountId] = useState("");
   const toast = useToast();
   const categories = data.categorias_financeiras.filter((x) => x.tipo === "despesa");
   const parse = () => {
@@ -1201,7 +1217,20 @@ function QuickImportPage({ data, save }: { data: Props["data"]; save: Props["sav
     setParsed(rows);
   };
   const persist = async () => {
-    for (const item of parsed) await save("despesas", item);
+    const account = calculateAccountBalances(data).find(
+      (item) => item.id === accountId && item.status === "ativa",
+    );
+    if (!account) {
+      toast({ title: "Selecione uma conta de pagamento ativa", status: "error" });
+      return;
+    }
+    const total = parsed.reduce((sum, item) => sum + (item.valor ?? 0), 0);
+    if (!account.permite_saldo_negativo && account.saldo < total) {
+      toast({ title: "Saldo insuficiente para importar estes gastos", status: "error" });
+      return;
+    }
+    for (const item of parsed)
+      await save("despesas", { ...item, conta_id: account.id });
     toast({ title: `${parsed.length} gasto(s) importado(s)`, status: "success" });
     setText("");
     setParsed([]);
@@ -1211,6 +1240,19 @@ function QuickImportPage({ data, save }: { data: Props["data"]; save: Props["sav
       <PageHeader title="Importação Rápida" subtitle="Cole gastos em texto livre e confirme antes de salvar." />
       <Grid templateColumns={{ base: "1fr", lg: "1fr 1fr" }} gap="4">
         <Box {...panel} p="5">
+          <FormControl mb="4" isRequired>
+            <FormLabel>Conta de pagamento</FormLabel>
+            <Select value={accountId} onChange={(event) => setAccountId(event.target.value)}>
+              <option value="">Selecione</option>
+              {calculateAccountBalances(data)
+                .filter((account) => account.status === "ativa")
+                .map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.nome} · {formatCurrencyBRL(account.saldo)}
+                  </option>
+                ))}
+            </Select>
+          </FormControl>
           <Textarea minH="240px" value={text} onChange={(e) => setText(e.target.value)} placeholder={"Mercado 89,90 alimentação pix\nGasolina 120 transporte débito\nAcademia 120 recorrente"} />
           <Button mt="4" onClick={parse}>Interpretar gastos</Button>
         </Box>
@@ -1225,7 +1267,7 @@ function QuickImportPage({ data, save }: { data: Props["data"]; save: Props["sav
             ))}
             {!parsed.length && <Text color="muted">Nada interpretado ainda.</Text>}
           </Stack>
-          <Button mt="4" isDisabled={!parsed.length} onClick={() => void persist()}>Salvar despesas</Button>
+          <Button mt="4" isDisabled={!parsed.length || !accountId} onClick={() => void persist()}>Salvar despesas</Button>
         </Box>
       </Grid>
     </>
@@ -1404,7 +1446,7 @@ function ExportPage({ data }: { data: Props["data"] }) {
   );
 }
 
-function AccountsPage({ data, save }: { data: Props["data"]; save: Props["save"] }) {
+export function LegacyAccountsPage({ data, save }: { data: Props["data"]; save: Props["save"] }) {
   const modal = useDisclosure();
   const toast = useToast();
   const [form, setForm] = useState({
@@ -1561,7 +1603,7 @@ function PatrimonyEvolutionPage({ analysis }: { analysis: ReturnType<typeof calc
   );
 }
 
-export default function StrategicModule({ page, data, profile, save }: Props) {
+export default function StrategicModule({ page, data, profile, save, remove }: Props) {
   const analysis = useMemo(
     () => calculateStrategicAnalysis(data, profile),
     [data, profile],
@@ -1584,7 +1626,8 @@ export default function StrategicModule({ page, data, profile, save }: Props) {
   if (page === "fechamento") return <MonthlyClosingPage analysis={analysis} />;
   if (page === "orcamentos") return <BudgetsPage data={data} save={save} />;
   if (page === "exportacao") return <ExportPage data={data} />;
-  if (page === "contas") return <AccountsPage data={data} save={save} />;
+  if (page === "contas")
+    return <AccountManagement data={data} save={save} remove={remove} />;
   if (page === "evolucao") return <PatrimonyEvolutionPage analysis={analysis} />;
   return <PatrimonyPage analysis={analysis} />;
 }

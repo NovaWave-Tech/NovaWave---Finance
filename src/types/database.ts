@@ -64,6 +64,8 @@ export interface FinanceRecord {
   destino_tipo?: string;
   destino_id?: string | null;
   saldo_inicial?: number;
+  saldo?: number;
+  permite_saldo_negativo?: boolean;
   dia_recebimento?: number;
   origem?: string;
   data_fechamento?: string;

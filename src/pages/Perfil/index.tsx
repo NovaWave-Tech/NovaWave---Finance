@@ -398,12 +398,20 @@ export default function ProfilePage({
                     />
                   </FormControl>
                   <FormControl>
-                      <FormLabel>Conta principal</FormLabel>
-                    <Input
+                    <FormLabel>Conta principal</FormLabel>
+                    <Select
                       value={profile.conta_principal ?? ""}
                       onChange={(e) => set("conta_principal", e.target.value)}
-                      placeholder="Conta corrente, carteira, etc."
-                    />
+                    >
+                      <option value="">Selecione</option>
+                      {data?.contas_financeiras
+                        .filter((account) => account.status === "ativa")
+                        .map((account) => (
+                          <option key={account.id} value={account.id}>
+                            {account.nome}
+                          </option>
+                        ))}
+                    </Select>
                   </FormControl>
                   <FormControl>
                     <FormLabel>Moeda padrão</FormLabel>

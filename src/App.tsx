@@ -94,6 +94,7 @@ import { profileService } from "./services/profileService";
 import DashboardPage from "./pages/Dashboard";
 import OperationalModule from "./pages/Modules";
 import GoalsPage from "./pages/Metas";
+import { calculateAccountBalances } from "./services/accountService";
 import CalculatorPage from "./pages/Calculadora";
 import ProfilePage from "./pages/Perfil";
 import SpendingControlPage from "./pages/ControleGastos";
@@ -159,6 +160,7 @@ type FormData = {
   valor_atual: string;
   aporte_mensal: string;
   data_objetivo: string;
+  conta_id: string;
 };
 const money = formatCurrencyBRL;
 const dateBR = formatDateBR;
@@ -199,6 +201,7 @@ const emptyForm: FormData = {
   valor_atual: "",
   aporte_mensal: "",
   data_objetivo: "",
+  conta_id: "",
 };
 
 function useFinanceData(userId: string) {
@@ -217,10 +220,32 @@ function useFinanceData(userId: string) {
           );
         const loadedProfile = await profileService.get(userId);
         setProfile(loadedProfile);
-        await financeService.ensureMonthlySalary(loadedProfile, userId);
+        const loadedAccounts = await financeService.list("contas_financeiras");
+        const activeAccounts = loadedAccounts.filter(
+          (account) => account.status === "ativa",
+        );
+        const preferredAccount = activeAccounts.find(
+          (account) =>
+            account.id ===
+              (loadedProfile.conta_principal ?? loadedProfile.main_account) ||
+            account.nome ===
+              (loadedProfile.conta_principal ?? loadedProfile.main_account),
+        );
+        await financeService.ensureMonthlySalary(
+          loadedProfile,
+          userId,
+          preferredAccount?.id ??
+            (activeAccounts.length === 1 ? activeAccounts[0].id : null),
+        );
         const entries = await Promise.all(
           (Object.keys(initialData) as DataKind[]).map(
-            async (k) => [k, await financeService.list(k)] as const,
+            async (k) =>
+              [
+                k,
+                k === "contas_financeiras"
+                  ? loadedAccounts
+                  : await financeService.list(k),
+              ] as const,
           ),
         );
         setData(Object.fromEntries(entries) as Record<DataKind, RecordData[]>);
@@ -266,6 +291,7 @@ function useFinanceData(userId: string) {
             valor: saved.valor,
             categoria: saved.categoria,
             categoria_id: saved.categoria_id,
+            conta_id: saved.conta_id,
             dia_vencimento: Number((saved.data ?? "").slice(8, 10)) || 1,
             forma_pagamento:
               kind === "receitas"
@@ -355,7 +381,24 @@ function useFinanceData(userId: string) {
       }
       return;
     }
-    const salary = await financeService.ensureMonthlySalary(updated, userId);
+    const salaryAccount = data.contas_financeiras.find(
+      (account) =>
+        account.status === "ativa" &&
+        (account.id === (updated.conta_principal ?? updated.main_account) ||
+          account.nome === (updated.conta_principal ?? updated.main_account)),
+    );
+    const salary = await financeService.ensureMonthlySalary(
+      updated,
+      userId,
+      salaryAccount?.id ??
+        (data.contas_financeiras.filter(
+          (account) => account.status === "ativa",
+        ).length === 1
+          ? data.contas_financeiras.find(
+              (account) => account.status === "ativa",
+            )?.id ?? null
+          : null),
+    );
     if (salary)
       setData((current) => ({
         ...current,
@@ -1076,12 +1119,14 @@ function CrudPage({
   onSave,
   onRemove,
   customCategories,
+  accounts = [],
 }: {
   kind: Kind;
   items: RecordData[];
   onSave: (x: RecordData) => Promise<void>;
   onRemove: (id: string) => Promise<void>;
   customCategories?: string[];
+  accounts?: RecordData[];
 }) {
   const cfg = configs[kind];
   const categoryOptions = customCategories ?? cfg.categories;
@@ -1140,6 +1185,7 @@ function CrudPage({
         descricao: form.descricao,
         valor: Number(form.valor),
         data: form.data,
+        conta_id: form.conta_id || null,
         ...(kind === "despesas"
           ? {
               forma_pagamento: form.forma_pagamento,
@@ -1157,6 +1203,37 @@ function CrudPage({
             }),
       });
     try {
+      if (
+        kind !== "metas_financeiras" &&
+        !item.conta_id
+      )
+        throw new Error(
+          kind === "receitas"
+            ? "Selecione a conta de destino da receita."
+            : "Selecione a conta usada para pagar a despesa.",
+        );
+      const selectedAccount = accounts.find(
+        (account) => account.id === item.conta_id,
+      );
+      if (
+        kind !== "metas_financeiras" &&
+        (!selectedAccount || selectedAccount.status !== "ativa")
+      )
+        throw new Error("Selecione uma conta financeira ativa.");
+      const previousPaidValue =
+        kind === "despesas" &&
+        editing?.status === "pago" &&
+        editing.conta_id === item.conta_id
+          ? editing.valor ?? 0
+          : 0;
+      if (
+        kind === "despesas" &&
+        item.status === "pago" &&
+        selectedAccount &&
+        !selectedAccount.permite_saldo_negativo &&
+        (selectedAccount.saldo ?? 0) + previousPaidValue < (item.valor ?? 0)
+      )
+        throw new Error("A conta selecionada não possui saldo suficiente.");
       await onSave(item);
       toast({
         title: `${cfg.singular[0].toUpperCase() + cfg.singular.slice(1)} ${editing ? "atualizada" : "adicionada"}`,
@@ -1498,6 +1575,28 @@ function CrudPage({
                       onChange={f("data")}
                     />
                   </Field>
+                  <Field
+                    label={
+                      kind === "receitas"
+                        ? "Conta de destino"
+                        : "Conta de pagamento"
+                    }
+                  >
+                    <Select
+                      isRequired
+                      value={form.conta_id}
+                      onChange={f("conta_id")}
+                    >
+                      <option value="">Selecione</option>
+                      {accounts
+                        .filter((account) => account.status === "ativa")
+                        .map((account) => (
+                          <option key={account.id} value={account.id}>
+                            {account.nome}
+                          </option>
+                        ))}
+                    </Select>
+                  </Field>
                   {kind === "despesas" && (
                     <>
                       <Field label="Forma de pagamento">
@@ -1670,6 +1769,7 @@ export default function App() {
             )
             .map((category) => category.nome ?? "")
             .filter(Boolean)}
+          accounts={calculateAccountBalances(finance.data)}
           onSave={(x) =>
             finance.save(kind, {
               ...x,
@@ -1694,6 +1794,7 @@ export default function App() {
           goals={finance.data.metas_financeiras}
           contributions={finance.data.aportes_metas}
           categories={finance.data.categorias_financeiras}
+          data={finance.data}
           save={finance.save}
           remove={finance.remove}
         />
@@ -1750,6 +1851,7 @@ export default function App() {
           data={finance.data}
           profile={finance.profile}
           save={finance.save}
+          remove={finance.remove}
         />
       );
     if (page === "perfil")

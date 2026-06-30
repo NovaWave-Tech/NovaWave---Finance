@@ -27,17 +27,21 @@ const statuses: Partial<Record<FinanceTable, string[]>> = {
   ],
   faturas_cartao: ["aberta", "fechada", "paga", "atrasada", "cancelada"],
   metas_financeiras: ["em_andamento", "concluida", "pausada", "cancelada"],
-  contas_financeiras: ["ativa", "inativa", "arquivada"],
+  contas_financeiras: ["ativa", "arquivada"],
   transferencias_internas: ["pendente", "confirmada", "cancelada"],
 };
 const requiredRelations: Partial<
   Record<FinanceTable, (keyof FinanceRecord)[]>
 > = {
+  receitas: ["conta_id"],
+  despesas: ["conta_id"],
   compras_cartao: ["cartao_id"],
+  cartoes: ["conta_id"],
   parcelas_cartao: ["compra_id", "cartao_id"],
   faturas_cartao: ["cartao_id"],
-  aportes_metas: ["meta_id"],
-  movimentacoes_investimentos: ["investimento_id"],
+  aportes_metas: ["meta_id", "conta_id"],
+  movimentacoes_investimentos: ["investimento_id", "conta_id"],
+  contas_recorrentes: ["conta_id"],
   orcamentos_categoria: ["categoria_id"],
 };
 export function validateFinanceRecord(
